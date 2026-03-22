@@ -121,9 +121,10 @@ Here is everything that changes in this lesson.
 
 ### `src/components/chat/MessageList.tsx` (modified)
 
-Update to take an array of `UIMessage` from the AI SDK:
+Update to take an array of `UIMessage` from the AI SDK and auto scroll to the bottom when new messages arrive (but only if the user was already at the bottom, so we don't yank them away from history they were reading):
 
 ```tsx
+import { useEffect, useRef } from "react";
 import type { UIMessage } from "ai";
 import MessageBubble from "./MessageBubble";
 
@@ -132,6 +133,26 @@ interface MessageListProps {
 }
 
 export default function MessageList({ messages }: MessageListProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Track whether the user was at (or near) the bottom before the last update
+  // so we only auto scroll when they were already following along.
+  const wasAtBottomRef = useRef(true);
+
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    wasAtBottomRef.current = distanceFromBottom < 50;
+  };
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (wasAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages]);
+
   if (messages.length === 0) {
     return (
       <div className="message-list empty">
@@ -143,7 +164,7 @@ export default function MessageList({ messages }: MessageListProps) {
   }
 
   return (
-    <div className="message-list">
+    <div className="message-list" ref={containerRef} onScroll={handleScroll}>
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
@@ -151,6 +172,8 @@ export default function MessageList({ messages }: MessageListProps) {
   );
 }
 ```
+
+The pattern: track scroll position with `onScroll`, store whether the user is "near the bottom" in a ref, then on every messages update, if they were near the bottom, snap the scroll to the new bottom. This way the chat follows along during streaming, but if the user scrolls up to read older messages, new messages do not interrupt them.
 
 ### `src/components/chat/MessageBubble.tsx` (modified)
 
