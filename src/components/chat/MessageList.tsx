@@ -1,8 +1,8 @@
+import type { UIMessage } from "ai";
 import MessageBubble from "./MessageBubble";
-import type { Message } from "./types";
 
 interface MessageListProps {
-  messages: Message[];
+  messages: UIMessage[];
 }
 
 export default function MessageList({ messages }: MessageListProps) {

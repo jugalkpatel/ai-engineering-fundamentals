@@ -1,16 +1,32 @@
 import { useState } from "react";
+import type { UIMessage } from "ai";
 import MessageList from "./MessageList";
-import type { Message } from "./types";
 import "./chat.css";
 
-export default function ChatPanel() {
-  const [messages] = useState<Message[]>([]);
+interface ChatPanelProps {
+  messages: UIMessage[];
+  sendMessage: (message: { role: "user"; parts: { type: "text"; text: string }[] }) => void;
+  status: string;
+}
+
+export default function ChatPanel({
+  messages,
+  sendMessage,
+  status,
+}: ChatPanelProps) {
   const [input, setInput] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Non-functional — wired up in lesson 3
+    if (!input.trim()) return;
+    sendMessage({
+      role: "user",
+      parts: [{ type: "text", text: input }],
+    });
+    setInput("");
   };
+
+  const isStreaming = status === "submitted" || status === "streaming";
 
   return (
     <div className="chat-panel">
@@ -25,9 +41,14 @@ export default function ChatPanel() {
           placeholder="Describe a diagram..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          disabled={isStreaming}
         />
-        <button type="submit" className="chat-send-btn">
-          Send
+        <button
+          type="submit"
+          className="chat-send-btn"
+          disabled={isStreaming || !input.trim()}
+        >
+          {isStreaming ? "..." : "Send"}
         </button>
       </form>
     </div>

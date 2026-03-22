@@ -15,5 +15,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/worker.ts"]
+  "include": ["src/worker.ts", "src/agent.ts", "src/tools.ts", "src/schemas.ts"]
 }
