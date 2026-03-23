@@ -118,9 +118,9 @@ export interface ScoredResult extends EvalResult {
 }
 ```
 
-### `evals/datasets/golden.json` (already in this branch)
+### `evals/datasets/golden.json` (already in your project)
 
-**The golden dataset is pre populated for you.** When you check out the `lesson-4` branch, the file already exists at `evals/datasets/golden.json` with 18 test cases (6 simple, 5 medium, 5 hard, 3 edge). We did not want to spend the live coding session typing out 200 lines of JSON. Open the file in your editor and read through the test cases to see how they are structured.
+**The golden dataset has been pre populated since lesson 1.** Whether you have been following along on your own branch or you just checked out `lesson-4`, the file exists at `evals/datasets/golden.json` with 18 test cases (6 simple, 5 medium, 5 hard, 3 edge). We did not want to spend the live coding session typing out 200 lines of JSON. Open the file in your editor and read through the test cases to see how they are structured.
 
 Here is one simple and one hard test case as a reference:
 
