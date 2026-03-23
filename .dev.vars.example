@@ -2,3 +2,6 @@
 # cp .dev.vars.example .dev.vars
 
 OPENAI_API_KEY=your-openai-api-key-here
+
+# Free signup at https://www.braintrust.dev — used in lesson 5 for the eval dashboard
+BRAINTRUST_API_KEY=your-braintrust-api-key-here
