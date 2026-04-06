@@ -8,21 +8,19 @@ interface Env extends Cloudflare.Env {
   OPENAI_API_KEY: string;
 }
 
-// Pull canvas state out of the latest user message's data part. The client
-// attaches it to every outgoing message via App.tsx. We look at the most
-// recent user message because the canvas only matters for what the user is
-// asking about right now.
+// Pull canvas state out of the user's just-arrived message. The client
+// attaches it as a `data-canvas-state` part on every outgoing message via
+// App.tsx — that's the only way to send extra payload alongside a message
+// in the Cloudflare AI Chat protocol, since useAgentChat / AIChatAgent only
+// understand UIMessage on the wire. onChatMessage runs because the user
+// sent a message, so the last message in the array is always theirs.
 function extractCanvasState(messages: unknown[]): unknown[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { role?: string; parts?: unknown[] };
-    if (m?.role !== "user" || !Array.isArray(m.parts)) continue;
-    for (const part of m.parts) {
-      const p = part as { type?: string; data?: { elements?: unknown[] } };
-      if (p?.type === "data-canvas-state" && Array.isArray(p.data?.elements)) {
-        return p.data.elements;
-      }
+  const last = messages.at(-1) as { parts?: unknown[] } | undefined;
+  for (const part of last?.parts ?? []) {
+    const p = part as { type?: string; data?: { elements?: unknown[] } };
+    if (p?.type === "data-canvas-state" && Array.isArray(p.data?.elements)) {
+      return p.data.elements;
     }
-    return [];
   }
   return [];
 }
