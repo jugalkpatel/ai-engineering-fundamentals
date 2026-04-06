@@ -192,7 +192,9 @@ Now any caller that has elements just passes them in. `runAgent` does the same t
 
 ### Browser side: data part on the user message
 
-The AI SDK supports custom **data parts** on `UIMessage`. We use one to carry the canvas snapshot.
+Here's a constraint of the Cloudflare AI Chat agent protocol that's worth flagging because it shapes the design: `useAgentChat` and `AIChatAgent` only know how to send `UIMessage` objects over the WebSocket. There is no "send a sidecar JSON blob alongside the message" hatch — the message *is* the protocol. So the only SDK-supported way to attach extra payload to a turn is to ride along on the user's message itself, via a **custom data part**.
+
+The AI SDK reserves part types prefixed with `data-` for exactly this. They're not text, not tool calls, not files — they're arbitrary JSON the SDK passes through untouched. Both the client and the server can read them. The model never sees them (which is what we want — the model sees the canvas via the serialized system prompt).
 
 In `src/App.tsx`, wrap `sendMessage` so every outgoing user message gets a `data-canvas-state` part appended:
 
@@ -216,20 +218,16 @@ Then pass `sendWithCanvas` to `<ChatPanel>` instead of the raw `sendMessage`. `C
 
 ### Worker side: read it back
 
-In `src/agent.ts`, walk the latest user message looking for the data part, and pass the elements through to `streamAgent`:
+`onChatMessage` runs *because* the user just sent a message, so the last entry in `this.messages` is always that user turn. Read its `data-canvas-state` part, hand it to `streamAgent`, done.
 
 ```ts
 function extractCanvasState(messages: unknown[]): unknown[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { role?: string; parts?: unknown[] };
-    if (m?.role !== "user" || !Array.isArray(m.parts)) continue;
-    for (const part of m.parts) {
-      const p = part as { type?: string; data?: { elements?: unknown[] } };
-      if (p?.type === "data-canvas-state" && Array.isArray(p.data?.elements)) {
-        return p.data.elements;
-      }
+  const last = messages.at(-1) as { parts?: unknown[] } | undefined;
+  for (const part of last?.parts ?? []) {
+    const p = part as { type?: string; data?: { elements?: unknown[] } };
+    if (p?.type === "data-canvas-state" && Array.isArray(p.data?.elements)) {
+      return p.data.elements;
     }
-    return [];
   }
   return [];
 }
@@ -249,7 +247,7 @@ export class DesignAgent extends AIChatAgent<Env> {
 }
 ```
 
-Custom data parts are not understood by `convertToModelMessages` (they get dropped on the way to the model — which is what we want, the model sees them via the system prompt instead). So we read them BEFORE the conversion.
+There's nothing stateful about this: each turn rebuilds the system prompt fresh from the canvas data part on that turn's user message. Old canvas state never accumulates. Custom `data-` parts are also dropped by `convertToModelMessages` on the way to the model — the model only ever sees the serialized canvas via the system prompt, never the raw JSON.
 
 ## Compaction
 
@@ -345,11 +343,30 @@ Every metric moved up. Schema hit the ceiling. The headline is **Preservation do
 
 It's not 100 yet. The remaining failures are cases where the agent still fires `generateDiagram` for tweaks. Lesson 7 (advanced tools) sharpens the tools themselves and should push this further. Lesson 11 (planning mode) gives the agent a chance to think before acting, which helps the harder cases.
 
-### A small but important fix: simulating the canvas in the eval
+### A small but important fix: be the client in the eval
 
 While wiring this up we hit a subtle bug in the eval. The old `extractElements` only walked `generateDiagram` results, ignoring `modifyDiagram` and ignoring the seed canvas state entirely. So when the agent did the *right* thing for a modify case (called `modifyDiagram` instead of regenerating), the eval saw zero elements in the output and the preservation scorer scored zero.
 
-The fix: `extractElements` now starts from the seed canvas state and walks tool calls in order, simulating what the canvas would look like after each call.
+To understand the fix, separate two things in your head:
+
+- **Canvas state in the system prompt** is the **input** — what existed *before* the agent ran. Comes from the seed (in the eval) or the browser data part (in prod).
+- **Canvas state we score against** is the **output** — what exists *after* the agent ran. To get this we have to apply the agent's tool calls to the input canvas, because the agent itself doesn't return a "final canvas." It returns a list of tool calls.
+
+In production this is exactly what the **client** does. Look at `App.tsx`:
+
+```ts
+// Production: client applies tool results to the live canvas
+for (const part of message.parts) {
+  if (part.type === "tool-generateDiagram" && part.state === "output-available") {
+    const elements = convertToExcalidrawElements(part.output.elements as never);
+    excalidrawAPI.updateScene({ elements });
+  }
+}
+```
+
+The client takes each tool result and merges it into the Excalidraw canvas. The user sees the post-application state. We want the eval to score the same thing — otherwise the eval and prod measure different things.
+
+So the eval simulates what the client does, just headless: start from the seed, walk the agent's tool results in order, apply each one (`generateDiagram` replaces, `modifyDiagram` mutates), end up with the final canvas. That's what gets scored.
 
 ```ts
 export function extractElements(steps: StepLike[], initial: unknown[] = []): unknown[] {
@@ -380,9 +397,9 @@ export function extractElements(steps: StepLike[], initial: unknown[] = []): unk
 }
 ```
 
-This is the same logic the client does when applying tool results to the live canvas, just in a single function on the eval side. The eval is now scoring **the post application canvas state**, not just the raw tool outputs.
+The eval is now scoring **the merged final state of the canvas**, the same way the user would see it. Same input model, same output model, both sides agree.
 
-This is a recurring theme in eval work: the scorer is only as good as the data you hand it. When you find a metric at 0 percent that should be moving, suspect the scorer/extraction before you suspect the model.
+A recurring theme in eval work: the scorer is only as good as the data you hand it. When you find a metric at 0 percent that should be moving, suspect the scorer/extraction before you suspect the model.
 
 ## What is next
 
