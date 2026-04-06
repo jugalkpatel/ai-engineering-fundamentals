@@ -111,6 +111,9 @@ export default function App() {
         sendMessage={sendMessage}
         status={status}
       />
+      <a href="#viewer" className="viewer-launch" title="Open diagram viewer for human scoring">
+        viewer
+      </a>
     </div>
   );
 }
