@@ -5,4 +5,5 @@ dist
 *.log
 openspec
 .claude
+notes
 lessons/.vitepress/cache

@@ -239,12 +239,27 @@ export const tools = {
 
   modifyDiagram: tool({
     description:
-      "Modify an existing element on the canvas. Use this when the user wants to change, update, move, resize, or restyle an existing element. You need to know the element's id.",
+      "Modify an existing element on the canvas by id. Set only the fields you want to change; everything else is left alone.",
     inputSchema: z.object({
       elementId: z.string().describe("The id of the element to modify"),
-      updates: z.record(z.string(), z.unknown()).describe(
-        "Object with the properties to update (e.g. { x: 100, backgroundColor: '#ff0000' })"
-      ),
+      // Explicit field list rather than a free form record. OpenAI's strict
+      // tool calling rejects unconstrained additionalProperties, and giving
+      // the model an enumerated list also tells it exactly what's tweakable.
+      updates: z.object({
+        x: z.number().optional(),
+        y: z.number().optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        text: z.string().optional(),
+        fontSize: z.number().optional(),
+        textAlign: z.enum(["left", "center", "right"]).optional(),
+        strokeColor: z.string().optional(),
+        backgroundColor: z.string().optional(),
+        fillStyle: z.enum(["solid", "hachure", "cross-hatch"]).optional(),
+        strokeWidth: z.number().optional(),
+        roughness: z.number().optional(),
+        opacity: z.number().optional(),
+      }),
     }),
     execute: async ({ elementId, updates }) => {
       return { elementId, updates };
@@ -299,6 +314,11 @@ export class DesignAgent extends AIChatAgent<Env> {
       messages: await convertToModelMessages(this.messages),
       tools,
       stopWhen: stepCountIs(5),
+      // OpenAI's strict tool calling mode requires every property in a tool
+      // input schema to be in `required` and rejects optional fields. Our
+      // modifyDiagram updates are intentionally all optional, so we turn
+      // strict mode off. We still get Zod validation locally.
+      providerOptions: { openai: { strictJsonSchema: false } },
     });
 
     return result.toUIMessageStreamResponse();
@@ -311,7 +331,7 @@ This is remarkably concise. The `AIChatAgent` base class gives us:
 - `this.env` — access to environment variables (our API key)
 - WebSocket handling, message serialization, and the chat protocol
 
-We just implement `onChatMessage()`, call `streamText()` with our model, tools, and messages, and return the streaming response.
+We just implement `onChatMessage()`, call `streamText()` with our model, tools, and messages, and return the streaming response. The one non-obvious bit is `providerOptions: { openai: { strictJsonSchema: false } }`. OpenAI's default strict tool mode rejects any tool input schema with optional properties, and our `modifyDiagram` tool intentionally has many optional fields (you only set what you want to change). Turning strict mode off lets that pattern work. We still validate the model's tool inputs locally via Zod, so we don't lose safety.
 
 ### `wrangler.toml` (modified)
 
