@@ -29,6 +29,53 @@ That's the whole lesson. No registry, no sandbox, no clever architecture. Just s
 
 The new files live under `src/tools/`. Each tool gets its own file because each one has its own schema and example, and putting them next to each other in one file gets noisy fast.
 
+First, the shared element schema in `src/tools/element-schema.ts`. Both `addElements` and (a nullable variant of) `updateElements` use this shape — keeping it in one place means the agent sees the same field names whether it's creating new shapes or editing existing ones:
+
+```ts
+import { z } from "zod";
+
+export const elementSchema = z.object({
+  id: z.string().describe("Unique identifier. Pick concise ids that hint at meaning, like 'rect_login' or 'arrow_login_db'."),
+  type: z.enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line"]),
+  x: z.number().describe("X position in pixels"),
+  y: z.number().describe("Y position in pixels"),
+  width: z.number().describe("Width in pixels"),
+  height: z.number().describe("Height in pixels"),
+  strokeColor: z.string().default("#1e1e1e").describe("Stroke color (hex)"),
+  backgroundColor: z.string().default("transparent").describe("Fill color"),
+  fillStyle: z.enum(["solid", "hachure", "cross-hatch"]).default("solid"),
+  strokeWidth: z.number().default(2),
+  roughness: z.number().default(1).describe("0 for clean, 1 for sketchy"),
+  opacity: z.number().default(100),
+  text: z.string().optional().describe("Text content (for text elements or labels)"),
+  fontSize: z.number().default(20),
+  fontFamily: z.number().default(1).describe("1=Virgil, 2=Helvetica, 3=Cascadia"),
+  textAlign: z.enum(["left", "center", "right"]).default("center"),
+  points: z
+    .array(z.array(z.number()))
+    .optional()
+    .describe("Array of [x,y] points for arrow/line elements"),
+  startBinding: z
+    .object({
+      elementId: z.string(),
+      focus: z.number(),
+      gap: z.number(),
+    })
+    .optional()
+    .describe("Bind arrow start to an element"),
+  endBinding: z
+    .object({
+      elementId: z.string(),
+      focus: z.number(),
+      gap: z.number(),
+    })
+    .optional()
+    .describe("Bind arrow end to an element"),
+});
+
+export type ElementInput = z.infer<typeof elementSchema>;
+```
+
 `src/tools/add-elements.ts`:
 
 ```ts
@@ -109,12 +156,15 @@ The big change from lesson 2's `modifyDiagram` is that `updateElements` is **bat
 `src/tools/remove-elements.ts` is the smallest:
 
 ```ts
+import { tool } from "ai";
+import { z } from "zod";
+
 export const removeElements = tool({
-  description: `Remove elements from the canvas by id.
+  description: `Remove elements from the canvas by id. Use this when the user wants to delete shapes. Ids must come from the canvas — call queryCanvas first if you don't know what's there.
 
 Example: removeElements({ ids: ["rect_old", "arrow_stale"] })`,
   inputSchema: z.object({
-    ids: z.array(z.string()),
+    ids: z.array(z.string()).describe("Array of element ids to remove"),
   }),
   execute: async ({ ids }) => {
     return { ids };
@@ -187,14 +237,27 @@ The third change is `searchWeb`. It's a normal server side tool with an execute 
 `src/tools/search-web.ts`:
 
 ```ts
+import { tool } from "ai";
+import { z } from "zod";
+
+interface TavilyResult {
+  title?: string;
+  content?: string;
+  url?: string;
+}
+
+interface TavilyResponse {
+  results?: TavilyResult[];
+}
+
 export function makeSearchWeb(apiKey: string | undefined) {
   return tool({
     description: `Search the web for current information. Use this when the user asks about recent technology, frameworks, services, or systems where you may not have up to date knowledge — for example "draw an architecture diagram of how Cloudflare Workers handle requests" should trigger a search before you start drawing.
 
 Example: searchWeb({ query: "how Cloudflare Workers handle incoming requests", maxResults: 5 })`,
     inputSchema: z.object({
-      query: z.string(),
-      maxResults: z.number().optional(),
+      query: z.string().describe("Search query"),
+      maxResults: z.number().optional().describe("How many results to return (default 5)"),
     }),
     execute: async ({ query, maxResults }) => {
       if (!apiKey) {
@@ -214,7 +277,7 @@ Example: searchWeb({ query: "how Cloudflare Workers handle incoming requests", m
         if (!response.ok) {
           return { error: `Tavily returned ${response.status}: ${await response.text()}` };
         }
-        const data = await response.json();
+        const data = (await response.json()) as TavilyResponse;
         const results = (data.results ?? []).map((r) => ({
           title: r.title ?? "",
           content: r.content ?? "",
@@ -343,21 +406,78 @@ const evalTools = {
 
 This is the recurring pattern: the eval has to *simulate* whatever the browser does in production, otherwise the agent loop hangs on the client side tool. Worth understanding because we'll do it again in lesson 9.
 
-`src/App.tsx` gets the new tool handlers and the `onToolCall` for queryCanvas. The full file is in the lesson 8 branch. The interesting bit is the message watcher:
+`src/App.tsx` gets the new tool handlers and the `onToolCall` for queryCanvas. The full message watcher in `App.tsx`:
 
 ```tsx
 useEffect(() => {
   if (!excalidrawAPI) return;
+
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const part of message.parts ?? []) {
       const type = (part as { type?: string }).type;
-      if (type === "tool-addElements") {
-        // skeletons → newElements, append to scene
-      } else if (type === "tool-updateElements") {
-        // batch merge fields by id
-      } else if (type === "tool-removeElements") {
-        // filter out removed ids
+      if (
+        type !== "tool-addElements" &&
+        type !== "tool-updateElements" &&
+        type !== "tool-removeElements"
+      ) {
+        continue;
+      }
+      const p = part as {
+        type: string;
+        toolCallId: string;
+        state: string;
+        output: unknown;
+      };
+      if (p.state !== "output-available") continue;
+      if (appliedToolCalls.current.has(p.toolCallId)) continue;
+      appliedToolCalls.current.add(p.toolCallId);
+
+      if (p.type === "tool-addElements") {
+        const output = p.output as { elements?: unknown };
+        const skeletons = output?.elements;
+        if (Array.isArray(skeletons) && skeletons.length > 0) {
+          // regenerateIds: false so the agent's chosen ids survive — otherwise
+          // later updateElements/removeElements calls (which use those ids) miss.
+          const newOnes = convertToExcalidrawElements(skeletons as never, {
+            regenerateIds: false,
+          });
+          const current = excalidrawAPI.getSceneElements();
+          const next = [...current, ...newOnes];
+          excalidrawAPI.updateScene({
+            elements: next,
+            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+          });
+          excalidrawAPI.scrollToContent(next, { fitToContent: true });
+        }
+      } else if (p.type === "tool-updateElements") {
+        const output = p.output as {
+          updates?: { id: string; fields: Record<string, unknown> }[];
+        };
+        const updates = output?.updates;
+        if (Array.isArray(updates) && updates.length > 0) {
+          const byId = new Map(updates.map((u) => [u.id, u.fields]));
+          const current = excalidrawAPI.getSceneElements();
+          const next = current.map((el) => {
+            const fields = byId.get(el.id);
+            return fields ? newElementWith(el, fields as never) : el;
+          });
+          excalidrawAPI.updateScene({
+            elements: next,
+            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+          });
+        }
+      } else if (p.type === "tool-removeElements") {
+        const output = p.output as { ids?: string[] };
+        const ids = new Set(output?.ids ?? []);
+        if (ids.size > 0) {
+          const current = excalidrawAPI.getSceneElements();
+          const next = current.filter((el) => !ids.has(el.id));
+          excalidrawAPI.updateScene({
+            elements: next,
+            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+          });
+        }
       }
     }
   }
