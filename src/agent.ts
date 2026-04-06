@@ -7,6 +7,8 @@ import { compactHistory } from "./context/compaction";
 interface Env extends Cloudflare.Env {
   OPENAI_API_KEY: string;
   TAVILY_API_KEY: string;
+  UPSTASH_VECTOR_REST_URL: string;
+  UPSTASH_VECTOR_REST_TOKEN: string;
 }
 
 export class DesignAgent extends AIChatAgent<Env> {
@@ -23,7 +25,11 @@ export class DesignAgent extends AIChatAgent<Env> {
     const result = streamAgent({
       model,
       messages,
-      env: { TAVILY_API_KEY: this.env.TAVILY_API_KEY },
+      env: {
+        TAVILY_API_KEY: this.env.TAVILY_API_KEY,
+        UPSTASH_VECTOR_REST_URL: this.env.UPSTASH_VECTOR_REST_URL,
+        UPSTASH_VECTOR_REST_TOKEN: this.env.UPSTASH_VECTOR_REST_TOKEN,
+      },
     });
 
     return result.toUIMessageStreamResponse();
