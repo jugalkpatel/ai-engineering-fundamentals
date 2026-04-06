@@ -312,7 +312,27 @@ This is the moment of truth. Make all the changes, run `npm run eval`, watch the
 npm run eval
 ```
 
-The new naming scheme tags every experiment with the current branch + git short SHA + timestamp, so old experiments stay queryable and you can correlate any past run back to the code state that produced it. You can also set `EXPERIMENT_LABEL=foo` to add an ad hoc tag, or `BRAINTRUST_EXPERIMENT_NAME=...` to override the whole thing.
+There's one eval file (`evals/diagram.eval.ts`) and many **experiments** that all run it. Each meaningful agent change gets its own experiment name in Braintrust, set via the `EXPERIMENT_NAME` env var. The package.json `eval` script hard codes the current variant, so on this branch:
+
+```json
+"eval": "EXPERIMENT_NAME=lesson-06-context-engineering dotenv -e .dev.vars -- braintrust eval evals/diagram.eval.ts"
+```
+
+When you want to compare an ad hoc variant without editing files (e.g., trying a different prompt), override on the command line:
+
+```bash
+EXPERIMENT_NAME=lesson-06-prompt-v2 npm run eval
+```
+
+Each EXPERIMENT_NAME maps to a Braintrust experiment. Multiple runs of the same experiment accumulate as runs *within* that experiment, with full history. Different experiment names → different experiments → side by side comparison in the dashboard.
+
+The mental model:
+
+- **eval** = the recipe (dataset + task + scorers). Stable.
+- **experiment** = one frozen run of that recipe. Comparable. New name when you change something meaningful.
+- **run** = one execution of an experiment. Multiple runs of the same experiment let you re-verify or capture variance.
+
+You don't make a new eval file every lesson — you make a new experiment name. New eval file only if the dataset, scorers, or task interface changes substantially.
 
 Lesson 5 → lesson 6 results on a real run:
 
