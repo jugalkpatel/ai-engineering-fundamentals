@@ -312,27 +312,25 @@ This is the moment of truth. Make all the changes, run `npm run eval`, watch the
 npm run eval
 ```
 
-There's one eval file (`evals/diagram.eval.ts`) and many **experiments** that all run it. Each meaningful agent change gets its own experiment name in Braintrust, set via the `EXPERIMENT_NAME` env var. The package.json `eval` script hard codes the current variant, so on this branch:
+There's **one** eval file (`evals/diagram.eval.ts`) — the dataset, task, and scorers. Every time you run it, Braintrust creates a **new experiment** in the project, automatically named after the current git branch plus a timestamp (`lesson-7-1775462435`), and tagged with rich git metadata: branch, commit SHA, dirty flag, commit message, even the git diff. You don't pass `experimentName` yourself — Braintrust does it for you.
 
-```json
-"eval": "EXPERIMENT_NAME=lesson-06-context-engineering dotenv -e .dev.vars -- braintrust eval evals/diagram.eval.ts"
-```
+That means the workflow is:
 
-When you want to compare an ad hoc variant without editing files (e.g., trying a different prompt), override on the command line:
-
-```bash
-EXPERIMENT_NAME=lesson-06-prompt-v2 npm run eval
-```
-
-Each EXPERIMENT_NAME maps to a Braintrust experiment. Multiple runs of the same experiment accumulate as runs *within* that experiment, with full history. Different experiment names → different experiments → side by side comparison in the dashboard.
+1. Make a change to the agent (system prompt, tool, retrieval, whatever).
+2. Commit it (so the dirty flag is clean and the commit message is meaningful).
+3. Run `npm run eval`.
+4. A new experiment appears in the dashboard tagged with that commit.
+5. Compare it against any previous experiment via the dashboard's comparison view, filtering or grouping by branch / commit / commit message.
 
 The mental model:
 
-- **eval** = the recipe (dataset + task + scorers). Stable.
-- **experiment** = one frozen run of that recipe. Comparable. New name when you change something meaningful.
-- **run** = one execution of an experiment. Multiple runs of the same experiment let you re-verify or capture variance.
+- **eval** = the recipe (dataset + task + scorers). Stable. One file.
+- **experiment** = one frozen run of that recipe. Immutable. Comparable. Auto-named.
+- **run** = the act of executing the eval to produce one experiment.
 
-You don't make a new eval file every lesson — you make a new experiment name. New eval file only if the dataset, scorers, or task interface changes substantially.
+You only make a *new* eval file when the dataset, scorers, or task interface itself meaningfully changes. Adding a new scorer or new test cases is just an evolution of the same eval. Switching to a totally different agent job (e.g., a new product) is a new eval.
+
+The reason this works without manual naming: every experiment carries its full git context, so you can always answer "what code produced this run?" by looking at the metadata. Commit your changes before running the eval and the audit trail writes itself.
 
 Lesson 5 → lesson 6 results on a real run:
 
