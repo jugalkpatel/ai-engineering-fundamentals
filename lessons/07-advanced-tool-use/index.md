@@ -552,96 +552,58 @@ for (const step of result.steps) {
 return { text: result.text, elements: sim, toolCalls, steps: result.steps };
 ```
 
-### New scorer: ToolChoice
+### New scorers: ToolChoice, BoundArrows, Connectivity, BoundLabels
 
-The Preservation scorer is gone. It was tied to the old `modifyDiagram` tool surface and once `extractElements` simulated the canvas headlessly it stopped meaning much. We replace it with a scorer that checks **tool choice** against the test case `category` already in golden, no dataset changes needed.
+The current scorers (Schema, Structure, LabelKeywords, Preservation) all pass even when the diagram is visually broken. We've talked about why throughout this lesson: arrows that don't bind, boxes with no labels, shapes that don't connect. None of the existing scorers can see those failures.
 
-**`evals/scorers/toolChoice.ts`**:
+Lesson 7 ships **four new scorers** alongside the tool and schema work. They aren't live coded — there's enough new code in this lesson already, and the scorers are mostly mechanical filtering and counting. They're already in `evals/scorers/`. Open each file as we go through them: each one has a long header comment explaining what it measures, what failure mode it catches, and why it lives in this lesson.
 
-```ts
-export const toolChoiceScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
-  output,
-  expected,
-}) => {
-  const calls = output.toolCalls ?? [];
-  const category = expected?.category;
+The Preservation scorer gets retired. It was tied to the old `modifyDiagram` tool surface and once `extractElements` simulates the canvas headlessly it stopped meaning much. ToolChoice replaces it.
 
-  if (category === "create" || category === "domain") {
-    const ok = calls.includes("addElements");
-    return { name: "ToolChoice", score: ok ? 1 : 0, metadata: { category, calls } };
-  }
+| Scorer | File | What it catches |
+|---|---|---|
+| **ToolChoice** | `evals/scorers/toolChoice.ts` | Did the agent reach for the right tool given the test case category? Modify cases must call `queryCanvas` before any mutation; create cases must call `addElements`. |
+| **BoundArrows** | `evals/scorers/boundArrows.ts` | For every arrow, are both `startBinding` and `endBinding` set to ids that exist in the output? Catches floating arrows. |
+| **Connectivity** | `evals/scorers/connectivity.ts` | For prompts that imply connected structure ("flow", "sequence", "between"), are all shapes reachable through the arrow graph? Catches orphan shapes. |
+| **BoundLabels** | `evals/scorers/boundLabels.ts` | For every container shape, is there a text element with `containerId` pointing back at it? Catches the "boxes with no labels" failure that the schema work in section 1 was designed to fix. |
 
-  if (category === "modify") {
-    const queryAt = calls.indexOf("queryCanvas");
-    const firstMutator = calls.findIndex(
-      (n) => n === "updateElements" || n === "removeElements"
-    );
-    if (firstMutator < 0) return { name: "ToolChoice", score: 0, metadata: { category, calls } };
-    if (queryAt < 0 || queryAt > firstMutator) {
-      return { name: "ToolChoice", score: 0.5, metadata: { category, calls, reason: "mutated without querying first" } };
-    }
-    return { name: "ToolChoice", score: 1, metadata: { category, calls } };
-  }
-
-  return null;
-};
-```
-
-The rules, by category:
-
-- **create** / **domain**: `addElements` must be called.
-- **modify**: at least one of `updateElements` or `removeElements` must be called, and `queryCanvas` must come **before** the first mutation. If the agent mutates without querying first, that's half credit because it's hallucinating ids.
-- **edge**: returns null and Braintrust skips it.
-
-Add it to the eval scorer list and drop `preservationScorer`. Run the eval, compare against the lesson 6 baseline. Schema, LabelKeywords, and Structure should hold or improve. ToolChoice is a fresh metric with no historical comparison.
-
-### New scorer: BoundLabels
-
-Lesson 6 added BoundArrows and Connectivity, but it didn't measure whether the model was actually labeling its shapes. It couldn't, because the lesson 6 schema didn't have `containerId`. Now that we've added `containerId` to the element schema in section 1, we have a precise way to measure this.
-
-`BoundLabels` checks: for every container shape (rectangle, ellipse, diamond) in the output, is there a text element whose `containerId` points back to it? Score is the ratio of labeled shapes to total shapes. This is the most direct measure of "is the diagram readable" we can write.
-
-**`evals/scorers/boundLabels.ts`**:
+Wire all four into `evals/diagram.eval.ts` (drop `preservationScorer`):
 
 ```ts
-import type { EvalScorer } from "braintrust";
-import type { AgentOutput } from "./schema";
-import type { GoldenTestCase } from "../buildMessages";
+import { toolChoiceScorer } from "./scorers/toolChoice";
+import { boundArrowsScorer } from "./scorers/boundArrows";
+import { connectivityScorer } from "./scorers/connectivity";
+import { boundLabelsScorer } from "./scorers/boundLabels";
 
-const SHAPE_TYPES = new Set(["rectangle", "ellipse", "diamond"]);
+// ...
 
-export const boundLabelsScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
-  output,
-}) => {
-  const elements = (output.elements ?? []) as Record<string, unknown>[];
-  const shapes = elements.filter(
-    (el) => typeof el?.type === "string" && SHAPE_TYPES.has(el.type as string)
-  );
-  if (shapes.length === 0) return null;
-
-  const boundLabelShapeIds = new Set<string>();
-  for (const el of elements) {
-    if (el?.type !== "text") continue;
-    const containerId = el.containerId;
-    if (typeof containerId === "string" && containerId.length > 0) {
-      boundLabelShapeIds.add(containerId);
-    }
-  }
-
-  let labeled = 0;
-  const unlabeled: string[] = [];
-  for (const shape of shapes) {
-    const id = typeof shape.id === "string" ? shape.id : null;
-    if (id && boundLabelShapeIds.has(id)) labeled += 1;
-    else unlabeled.push(id ?? "(no id)");
-  }
-
-  return {
-    name: "BoundLabels",
-    score: labeled / shapes.length,
-    metadata: { labeled, total: shapes.length, unlabeled },
-  };
-};
+scores: [
+  schemaScorer,
+  structureScorer,
+  toolChoiceScorer,
+  labelKeywordScorer,
+  boundArrowsScorer,
+  connectivityScorer,
+  boundLabelsScorer,
+],
 ```
 
-Add it to the eval scorer list alongside the others. After the schema description changes in section 1, BoundLabels should jump significantly. The model now has both the field (`containerId`) AND the description telling it when to use the field. The two work together: the field is the mechanism, the description is the prompt.
+ToolChoice also needs `output.toolCalls` to do its job, so `runAgent` exposes a flat list of tool names called across the run, and `AgentOutput` gains a `toolCalls: string[]` field. The eval task passes it through.
+
+```ts
+// in runAgent (src/agent-core.ts), after generateText returns:
+const toolCalls: string[] = [];
+for (const step of result.steps) {
+  for (const call of step.toolCalls ?? []) toolCalls.push(call.toolName);
+}
+return { text: result.text, elements: sim, toolCalls, steps: result.steps };
+```
+
+Run the eval. After this lesson:
+
+- **BoundLabels** should jump from near zero to most of the way to 1. The schema field plus the description that tells the model when to use it is the most direct cause/effect in the lesson.
+- **BoundArrows** should also jump. Same reason: the schema description names the failure mode in caps.
+- **Connectivity** should follow BoundArrows up, with some gap because the model still misses cases that need 4+ arrows.
+- **ToolChoice** is a brand new metric. It starts at whatever it starts at; subsequent lessons will move it.
+
+Open the scorer files and read the header comments out loud during the lesson. They explain why each one exists and what failure it catches. That's all the live coverage these need.
