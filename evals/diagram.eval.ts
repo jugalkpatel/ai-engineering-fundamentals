@@ -44,6 +44,7 @@ Eval<GoldenTestCase, AgentOutput, GoldenTestCase>("Diagram Agent", {
     const result = await runAgent({
       model: openai("gpt-5.4-mini"),
       messages: buildMessages(testCase),
+      canvasState: testCase.seed?.elements ?? [],
     });
     return { text: result.text, elements: result.elements };
   },

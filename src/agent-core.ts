@@ -31,6 +31,10 @@ When the user asks to modify an element, use the modifyDiagram tool with the ele
 interface AgentArgs {
   model: LanguageModel;
   messages: ModelMessage[];
+  // Seed canvas state for the headless simulator. The eval passes this so
+  // modify cases can be scored against the post application canvas. The
+  // worker leaves it undefined; the browser handles the real mutation.
+  canvasState?: any[];
   system?: string;
   maxSteps?: number;
 }
@@ -56,6 +60,7 @@ export function streamAgent({
 export async function runAgent({
   model,
   messages,
+  canvasState,
   system = SYSTEM_PROMPT,
   maxSteps = 5,
 }: AgentArgs) {
@@ -68,27 +73,38 @@ export async function runAgent({
   });
   return {
     text: result.text,
-    elements: extractElements(result.steps),
+    elements: extractElements(result.steps, canvasState ?? []),
     steps: result.steps,
   };
 }
 
-// Walk every step and pull out elements produced by generateDiagram tool calls.
+// Walk the agent's tool calls in order and simulate what the canvas would
+// look like after they were all applied. This mirrors what the client does
+// in the browser: generateDiagram replaces the canvas, modifyDiagram merges
+// updates into the matching element by id.
 interface StepLike {
   toolResults?: { toolName: string; output: unknown }[];
 }
 
-export function extractElements(steps: StepLike[]): unknown[] {
-  const elements: unknown[] = [];
+export function extractElements(steps: StepLike[], initial: any[] = []): any[] {
+  let canvas = [...initial];
+
   for (const step of steps) {
     for (const toolResult of step.toolResults ?? []) {
       if (toolResult.toolName === "generateDiagram") {
-        const output = toolResult.output as { elements?: unknown[] };
+        const output = toolResult.output as any;
         if (Array.isArray(output?.elements)) {
-          elements.push(...output.elements);
+          canvas = [...output.elements];
+        }
+      } else if (toolResult.toolName === "modifyDiagram") {
+        const output = toolResult.output as any;
+        if (typeof output?.elementId === "string" && output.updates) {
+          const target = canvas.find((el) => el.id === output.elementId);
+          if (target) Object.assign(target, output.updates);
         }
       }
     }
   }
-  return elements;
+
+  return canvas;
 }
