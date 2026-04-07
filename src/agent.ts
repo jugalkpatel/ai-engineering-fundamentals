@@ -11,7 +11,7 @@ interface Env extends Cloudflare.Env {
 export class DesignAgent extends AIChatAgent<Env> {
   async onChatMessage() {
     const openai = createOpenAI({ apiKey: this.env.OPENAI_API_KEY });
-    const model = openai("gpt-5.4-mini");
+    const model = openai("gpt-5.4");
     const messages = await convertToModelMessages(this.messages);
 
     const result = streamAgent({
