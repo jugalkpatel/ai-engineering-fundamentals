@@ -19,55 +19,94 @@ A new experiment shows up in Braintrust, tagged with the current branch and comm
 
 ## Rewriting `SYSTEM_PROMPT`
 
-The current prompt is **zero shot**: a short list of bullet point guidelines and no examples. Zero shot prompts ask the model to figure out the right behavior from a description alone. They're fine for trivial tasks, brittle for anything where the model has to make a judgment call (like "should I regenerate or modify?").
+The current prompt is a short bullet list with no examples, no rules about how Excalidraw actually works, and no layout guidance. The model is left to invent everything. The result is the diagrams you saw in lesson 5: floating arrows, unlabeled boxes, overlapping elements, the model setting `text` on a rectangle and expecting it to render as a label inside the box (it doesn't). All of these failures trace back to the prompt not telling the model what's true about the medium it's working in.
 
-The upgrade is **few shot** (sometimes called multi shot): show the model 2 or 3 short input, action, reply patterns that demonstrate the exact decision you want it to make. Few shot examples are most useful when they teach a decision boundary, not when they show pretty results. We're also taking the chance to be more thorough overall: explicit role, capabilities, output constraints, and behavioral guidelines, instead of one undifferentiated bullet list.
+We rewrite the prompt to do six things, in this order:
 
-The new prompt follows that structure. Excerpt:
+1. **Pick a niche.** "Diagram design assistant" is too broad. We narrow to **technical diagrams**: architecture, sequence, flowchart, state machine, ER. A narrow niche lets us be opinionated about layout and structure.
+2. **Move from zero shot to few shot.** Zero shot prompts ask the model to figure out the right behavior from a description alone. They're fine for trivial tasks and brittle for anything that requires a judgment call. Few shot examples teach a decision boundary by example. We add a worked example showing the exact element list for a real diagram.
+3. **Add hard rules.** Numbered, non negotiable. These describe the *medium*: how Excalidraw labels work (separate text elements, not a `text` field on a rectangle), how arrows connect to shapes (`startBinding` and `endBinding`, not raw points), what counts as a degenerate element. The model can't infer these from the schema alone.
+4. **Add a layout grid.** Models are bad at coordinates. Give them an explicit grid: standard sizes, standard strides, fixed origin. Layout becomes "follow the rule" instead of "guess the number."
+5. **Add a pattern library.** Since the niche is technical diagrams, name the patterns. "Architecture" looks like X. "Sequence" looks like Y. When the user asks for "the OAuth2 flow," the model recognizes it as a sequence diagram and reaches for that template.
+6. **Add negative prompts.** Explicit "do NOT do X" lines targeting the specific failure modes we've seen. Counter intuitively, these work very well on language models, especially for failures the model is statistically prone to (like setting `text` on a rectangle because every other diagramming tool works that way).
+
+### The new prompt structure
 
 **`src/agent-core.ts`**:
 
 ```ts
 export const SYSTEM_PROMPT = `# Role
 
-You are a diagram design assistant that controls an Excalidraw canvas. Your job is to translate the user's requests into precise tool calls that draw or modify shapes on the canvas. You are not a chat bot. You are a tool using agent that produces diagrams.
+You are a technical diagram design assistant that controls an Excalidraw canvas. Your niche is technical diagrams: architecture, sequence, flowchart, state machine, ER. You translate the user's request into precise tool calls that produce a working diagram. You are not a chat bot. You are a tool using agent.
 
-# Capabilities
+# Tools
 
-You have two tools:
+- **generateDiagram(elements)** produce a list of Excalidraw elements. Use when the canvas is empty or the diagram needs to be replaced from scratch.
+- **modifyDiagram(elementId, updates)** change a single existing element by id. Element ids come from the canvas state in this prompt.
 
-- **generateDiagram(elements)** — produce a list of Excalidraw elements... Use this when the canvas is empty, when the user asks for something brand new, or when the existing diagram needs to be replaced from scratch.
-- **modifyDiagram(elementId, updates)** — change a single existing element by id. Use this when the user wants to recolor, rename, move, resize, or otherwise tweak something already on the canvas.
+# Hard rules
 
-# Output constraints
+These are not suggestions. Violating any of them produces a broken diagram.
 
-Every element you create must include id, type, x, y, width, height...
+1. **Labels are SEPARATE text elements.** Setting \`text\` on a rectangle, ellipse, or diamond does NOT render anything inside the box. To label a shape, create the shape AND a separate text element positioned over the shape's center.
+2. **Every connecting arrow must bind both ends.** An arrow that connects two shapes MUST set \`startBinding.elementId\` and \`endBinding.elementId\` to ids that exist in the same call or already on the canvas. Arrows without both bindings float free in space.
+3. **No degenerate elements.** Width and height at least 20. No empty text.
+4. **No overlapping elements.** Use the layout grid.
+5. **Pick concise meaningful ids.** \`rect_user\`, never \`element_42\`.
 
-# Behavioral guidelines
+# Layout grid
 
-- Use the canvas state. If the canvas is non empty, the system message includes a summary of every element with its id and label. Never invent ids.
-- Prefer modifyDiagram for tweaks. If the user says "make the login box red," do not regenerate the whole canvas.
-- Preserve what exists. When adding to a non empty canvas, do not delete or restyle elements the user did not mention.
-- Ask one clarifying question only if the request is genuinely ambiguous.
+- Standard rectangle: 200x80. Standard ellipse / diamond: 120x120.
+- Horizontal stride: 280px. Vertical stride: 160px. Origin: (100, 100).
+- Row of N nodes: x = 100, 380, 660, 940, 1220.
+- Column of N nodes: y = 100, 260, 420, 580.
+- Text labels go at the same x, y, w, h as the shape they label.
 
-# Examples
+# Diagram patterns
 
-**Example 1 — empty canvas, simple create**
-User: "draw a circle and a square next to each other"
-Call generateDiagram with two elements... Reply: "Done — circle on the left, square on the right."
+- **Architecture**: rectangles for services, arrows for calls. Left to right.
+- **Sequence**: actors as labeled rectangles across the top. Vertical lifelines drop straight down. Numbered arrows between adjacent lifelines.
+- **Flowchart**: rectangles for steps, diamonds for decisions, arrows top to bottom. Decisions branch with "yes"/"no" arrows.
+- **State machine**: ellipses for states, arrows labeled with transitions.
+- **ER**: rectangles for entities, lines labeled with cardinality.
 
-**Example 2 — non empty canvas, recolor**
-Canvas state shows rect_login ("Login") and rect_db ("Database").
-User: "make the login box red."
-Call modifyDiagram("rect_login", { backgroundColor: "#fa5252" }). Reply: "Done — login box is now red."
+# Negative prompts
 
-**Example 3 — non empty canvas, additive**
-Canvas state shows rect_api ("API") and rect_db ("Database").
-User: "add a Cache box between them and route the API through the cache."
-Call generateDiagram with one new rectangle rect_cache plus arrows... Do not redraw rect_api or rect_db — they already exist.`;
+- Do NOT put \`text\` on a rectangle and expect it to render as a label inside the box. It will not.
+- Do NOT create arrows with raw \`points\` arrays for shape to shape connections.
+- Do NOT create arrows where bindings reference an id that doesn't exist.
+- Do NOT place two elements at the same coordinates.
+
+# Worked example: a labeled flow
+
+User: "draw a flow from User to API to Database"
+
+1. \`rect_user\` rectangle at (100, 100) 200x80
+2. \`text_user\` text at (100, 100) 200x80, text="User"
+3. \`rect_api\` rectangle at (380, 100) 200x80
+4. \`text_api\` text at (380, 100) 200x80, text="API"
+5. \`rect_db\` rectangle at (660, 100) 200x80
+6. \`text_db\` text at (660, 100) 200x80, text="Database"
+7. \`arrow_user_api\` arrow with startBinding="rect_user", endBinding="rect_api"
+8. \`arrow_api_db\` arrow with startBinding="rect_api", endBinding="rect_db"
+
+Three boxes, three labels (one per box, same coords, same size), two bound arrows. That is a working diagram.`;
 ```
 
-The full version is in `src/agent-core.ts`. The examples don't just show good output, they show **the exact decision the model needs to make**: which tool to call given which canvas state.
+(Full version is in `src/agent-core.ts`, including modify examples and behavioral guidelines. The block above is the new content; everything else carried over.)
+
+### Why negative prompts work
+
+Negative prompts feel wrong to people who learned that "telling the model what to do is more effective than telling it what not to do." That advice exists because vague positive instructions ("be concise") tend to land better than vague negative ones ("don't be verbose"). But for **specific, recurring failure modes**, negative prompts are a sharper tool. The model has a strong prior that pulls it toward the failure (every other diagramming tool puts text inside the rectangle, so the model assumes Excalidraw does too). A positive instruction like "use a separate text element with the same coordinates" doesn't fight that prior. A negative instruction like "do NOT put text on a rectangle and expect it to render" names the prior and overrides it.
+
+Use negative prompts for:
+- A failure mode you observed in evals or in production
+- A behavior the model has a strong prior for that you specifically want to suppress
+- API quirks that contradict a sensible default (like `text` on a rectangle in Excalidraw)
+
+Don't use negative prompts for:
+- General style guidance (positive framing wins)
+- Long lists of "don't do X, don't do Y, don't do Z" — over a handful, the model starts ignoring them. Be selective.
 
 ## Canvas state in context
 
@@ -215,17 +254,154 @@ export class DesignAgent extends AIChatAgent<Env> {
 
 Each turn rebuilds the system prompt fresh from the canvas data part on that turn's user message. Old canvas state never accumulates.
 
+## New scorers: BoundArrows and Connectivity
+
+The current scorers (Schema, Structure, LabelKeywords, Preservation) all pass even when the diagram is visually broken. Look at the lesson 5 output: the agent draws three boxes and arrows that don't connect to anything. Schema passes because every element has the required fields. Structure passes because the count matches. LabelKeywords passes because the words are in there somewhere. None of them measure whether the diagram **actually composes into a working picture**.
+
+We need scorers that look at the visual structure. Two new ones, both output based, neither needs golden dataset changes.
+
+### BoundArrows
+
+For every arrow in the output, check that BOTH `startBinding.elementId` and `endBinding.elementId` reference an element id that exists in the output. Score is the ratio of properly bound arrows to total arrows.
+
+This catches the "arrows flying off into space" failure. Arrows without bindings, or with bindings that point to ids the model invented, sit at hardcoded coordinates and look like floating lines next to the actual diagram. The current agent gets this wrong constantly.
+
+**`evals/scorers/boundArrows.ts`**:
+
+```ts
+import type { EvalScorer } from "braintrust";
+import type { AgentOutput } from "./schema";
+import type { GoldenTestCase } from "../buildMessages";
+
+export const boundArrowsScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
+  output,
+}) => {
+  const elements = (output.elements ?? []) as Record<string, unknown>[];
+  const ids = new Set(
+    elements.map((el) => (typeof el?.id === "string" ? el.id : null)).filter(Boolean) as string[]
+  );
+
+  const arrows = elements.filter((el) => el?.type === "arrow");
+  if (arrows.length === 0) return null;
+
+  let bound = 0;
+  const broken: string[] = [];
+  for (const arrow of arrows) {
+    const start = arrow.startBinding as { elementId?: string } | null | undefined;
+    const end = arrow.endBinding as { elementId?: string } | null | undefined;
+    const ok = !!(start?.elementId && end?.elementId && ids.has(start.elementId) && ids.has(end.elementId));
+    if (ok) bound += 1;
+    else broken.push(typeof arrow.id === "string" ? arrow.id : "(no id)");
+  }
+
+  return {
+    name: "BoundArrows",
+    score: bound / arrows.length,
+    metadata: { bound, total: arrows.length, broken },
+  };
+};
+```
+
+Returns null when there are no arrows (Braintrust skips the case).
+
+### Connectivity
+
+For diagrams that should be connected (the prompt mentions "flow", "sequence", "between", "from X to Y"), build a graph from the bound arrows and check what fraction of shapes are reachable from the first one. Score is `reachable / total`.
+
+This catches the "I made 5 boxes but only 2 are connected" failure. It only fires for prompts that hint at connectivity, so it doesn't punish freeform diagrams that are inherently disconnected.
+
+**`evals/scorers/connectivity.ts`**:
+
+```ts
+import type { EvalScorer } from "braintrust";
+import type { AgentOutput } from "./schema";
+import type { GoldenTestCase } from "../buildMessages";
+
+const CONNECTED_HINTS = ["flow", "sequence", "between", "from", "to ", "pipeline", "chain", "process"];
+const SHAPE_TYPES = new Set(["rectangle", "ellipse", "diamond"]);
+
+export const connectivityScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
+  output,
+  input,
+}) => {
+  const prompt = (input?.input ?? "").toLowerCase();
+  if (!CONNECTED_HINTS.some((h) => prompt.includes(h))) return null;
+
+  const elements = (output.elements ?? []) as Record<string, unknown>[];
+  const shapes = elements.filter((el) => typeof el?.type === "string" && SHAPE_TYPES.has(el.type as string));
+  if (shapes.length < 2) return null;
+
+  const adj = new Map<string, Set<string>>();
+  for (const shape of shapes) {
+    if (typeof shape.id === "string") adj.set(shape.id, new Set());
+  }
+
+  for (const el of elements) {
+    if (el?.type !== "arrow") continue;
+    const start = (el.startBinding as { elementId?: string } | null | undefined)?.elementId;
+    const end = (el.endBinding as { elementId?: string } | null | undefined)?.elementId;
+    if (!start || !end) continue;
+    if (adj.has(start) && adj.has(end)) {
+      adj.get(start)!.add(end);
+      adj.get(end)!.add(start);
+    }
+  }
+
+  const start = shapes[0]!.id as string;
+  const seen = new Set<string>([start]);
+  const queue = [start];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const next of adj.get(cur) ?? []) {
+      if (!seen.has(next)) {
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+
+  return {
+    name: "Connectivity",
+    score: seen.size / shapes.length,
+    metadata: { reachable: seen.size, total: shapes.length },
+  };
+};
+```
+
+### Wire them in
+
+**`evals/diagram.eval.ts`**:
+
+```ts
+import { boundArrowsScorer } from "./scorers/boundArrows";
+import { connectivityScorer } from "./scorers/connectivity";
+
+// ...
+
+scores: [
+  schemaScorer,
+  structureScorer,
+  preservationScorer,
+  labelKeywordScorer,
+  boundArrowsScorer,
+  connectivityScorer,
+],
+```
+
+These two scorers will be near zero on the lesson 5 baseline and should jump significantly with the new system prompt. They're the most visceral demonstration of "context engineering" because the difference shows up on the canvas, not just in the numbers.
+
 ## Re-run the eval
 
 ```bash
 npm run eval
 ```
 
-Compare against the baseline you captured at the start of the lesson. Things to watch for:
+Compare against the baseline. Things to watch for:
 
-- **Schema** should be at or near 100. The new prompt is strict enough that the agent shouldn't be producing malformed elements. If it drops, look at what the agent is generating in the dashboard.
-- **Preservation** is the headline metric for this lesson. A 1.5x to 2x jump is the rough target. If it barely moves, something is wrong with how the canvas state is reaching the prompt.
-- **Structure** and **LabelKeywords** should nudge up but not dramatically. The new prompt helps, but they're not the core point of this lesson.
+- **BoundArrows** should jump from near zero to most of the way to 1. The hard rules and the worked example tell the model exactly how to bind arrows. If it's still low, the model isn't reading the rules; check the prompt rendering.
+- **Connectivity** should also jump. The pattern library and layout grid push the model toward proper shape-arrow-shape structure.
+- **Preservation** should still move (canvas state in the prompt is doing its job).
+- **Schema, Structure, LabelKeywords** should hold steady or improve slightly.
 
 LLMs are non deterministic at temperature > 0 and there's run to run noise even on the same code. Direction and which scorers move matters more than specific digits.
 
