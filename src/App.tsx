@@ -11,6 +11,7 @@ import Canvas from "./components/Canvas";
 import ChatPanel from "./components/chat/ChatPanel";
 import { serializeCanvasState } from "./context/canvas-state";
 import { findOverlaps } from "./context/overlaps";
+import { applyCrossCallBindings, mergeBoundElements } from "./context/cross-call-bindings";
 import "./App.css";
 
 // One agent instance per page load. The canvas state lives only in the
@@ -84,68 +85,22 @@ export default function App() {
         const cleaned = elements.map(stripNulls) as Record<string, unknown>[];
         const newOnes = convertToExcalidrawElements(cleaned as never, { regenerateIds: false });
 
-        // Cross call binding fix.
-        // convertToExcalidrawElements only resolves arrow start/end ids
-        // against elements in its OWN input batch. When the model splits a
-        // diagram across multiple addElements calls (rectangles in call 1,
-        // arrows in call 2), the helper drops the arrows' bindings and logs
-        // "No element for start binding with id rect_X found." The runtime
-        // arrow renders unbound and the diagram looks broken.
-        //
-        // The system prompt promises the model "in this call OR on the
-        // canvas." To make that promise honest, we walk the skeleton input
-        // and patch the runtime arrows ourselves: for each arrow whose
-        // start/end id references an element already on the live scene,
-        // restore the binding and update the target shape's boundElements
-        // (Excalidraw uses bidirectional binding tracking).
+        // Patch arrow bindings that reference shapes already on the canvas
+        // (the helper only resolves bindings within its own input batch).
+        // See src/context/cross-call-bindings.ts for the gory details.
         const existingScene = api.getSceneElements();
-        const existingById = new Map(existingScene.map((el) => [el.id, el]));
-        const newById = new Map(
-          (newOnes as Array<{ id: string }>).map((el) => [el.id, el])
+        const { arrowsByTargetId } = applyCrossCallBindings(
+          cleaned,
+          newOnes as unknown as { id: string; startBinding?: unknown; endBinding?: unknown }[],
+          existingScene as unknown as { id: string }[]
         );
-        const incomingArrowsByTarget = new Map<string, string[]>();
-        for (const skeleton of cleaned) {
-          if (skeleton.type !== "arrow" && skeleton.type !== "line") continue;
-          const arrow = newById.get(skeleton.id as string) as
-            | Record<string, unknown>
-            | undefined;
-          if (!arrow) continue;
-          const startId = (skeleton.start as { id?: string } | undefined)?.id;
-          if (
-            typeof startId === "string" &&
-            existingById.has(startId) &&
-            !arrow.startBinding
-          ) {
-            arrow.startBinding = { elementId: startId, focus: 0, gap: 8 };
-            const list = incomingArrowsByTarget.get(startId) ?? [];
-            list.push(skeleton.id as string);
-            incomingArrowsByTarget.set(startId, list);
-          }
-          const endId = (skeleton.end as { id?: string } | undefined)?.id;
-          if (
-            typeof endId === "string" &&
-            existingById.has(endId) &&
-            !arrow.endBinding
-          ) {
-            arrow.endBinding = { elementId: endId, focus: 0, gap: 8 };
-            const list = incomingArrowsByTarget.get(endId) ?? [];
-            list.push(skeleton.id as string);
-            incomingArrowsByTarget.set(endId, list);
-          }
-        }
-        // Patch boundElements on existing target shapes so Excalidraw's
-        // bidirectional binding tracking sees the new arrows.
         const patchedExisting = existingScene.map((el) => {
-          const incoming = incomingArrowsByTarget.get(el.id);
+          const incoming = arrowsByTargetId.get(el.id);
           if (!incoming || incoming.length === 0) return el;
-          const prev = ((el as unknown as { boundElements?: readonly { id: string; type: string }[] })
-            .boundElements ?? []) as readonly { id: string; type: string }[];
-          const merged: { id: string; type: string }[] = [
-            ...prev,
-            ...incoming
-              .filter((id) => !prev.some((b) => b.id === id))
-              .map((id) => ({ id, type: "arrow" })),
-          ];
+          const merged = mergeBoundElements(
+            el as unknown as { id: string; boundElements?: readonly { id: string; type: string }[] },
+            incoming
+          );
           return newElementWith(el, { boundElements: merged } as never);
         });
 
