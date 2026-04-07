@@ -1,82 +1,52 @@
 # Advanced Tool Use
 
-Lesson 6 fixed the agent's *context* — what information lands in front of the model on every turn. This lesson fixes the *tools* — the actions the model can take. We replace the two coarse tools from lesson 2 (`generateDiagram`, `modifyDiagram`) with a small set of focused CRUD tools, move canvas reads onto a client side tool the agent calls on demand, and add a web search tool that hits a real external API. The whole point is that **better tools change behavior more than better prompting**, and the eval shows it.
-
-## Where we left off
-
-Lesson 6 ended at:
-
-| Scorer | Lesson 6 |
-|---|---|
-| Schema | 100% |
-| LabelKeywords | 94% |
-| Structure | 67% |
-| Preservation | 50% |
-
-Preservation jumped from 25 to 50 once we started serializing the canvas into the system prompt. But it's still half. The agent knows what's there, it just doesn't have the right tools to keep things while changing one piece. `generateDiagram` is all or nothing. The agent's options are "regenerate everything" or "modify one element by id." There is no "add a box without touching the rest." So when the user says "add a cache between the API and the database," the agent picks the closest tool, calls `generateDiagram` with everything redrawn, and the seed elements either change ids, lose styling, or vanish.
-
-This is the tool design lesson. The tool surface is part of the prompt — the model can only do what its tools let it do.
+Lesson 6 fixed the agent's context. This lesson fixes its tools. We replace the two coarse tools from lesson 2 (`generateDiagram`, `modifyDiagram`) with a small set of focused CRUD tools, all running client side, plus a server side `searchWeb` tool that hits a real external API. The tool surface is part of the prompt: the model can only do what its tools let it do.
 
 ## Three changes
 
-1. **Split `generateDiagram` and `modifyDiagram` into focused tools**: `addElements`, `updateElements`, `removeElements`. CRUD on the canvas.
-2. **Make `queryCanvas` a client side tool**: instead of stuffing canvas state into the system prompt every turn, the agent calls a tool that runs *in the browser* when it actually needs to know what's there.
-3. **Add `searchWeb` via Tavily**: a real external API call inside a tool's execute function. The agent fetches fresh information when the user asks about something the model may not know.
+1. **Split into focused tools**: `addElements`, `updateElements`, `removeElements`. CRUD on the canvas.
+2. **All canvas tools are client side**: no `execute` on the worker. The browser fulfills them via `useAgentChat`'s `onToolCall`. That includes `queryCanvas`, the read tool the agent calls on demand instead of paying the canvas serialization tax in the system prompt every turn.
+3. **Add `searchWeb` via Tavily**: a real external API call from a server side tool.
 
-That's the whole lesson. No registry, no sandbox, no clever architecture. Just small tools and one client side tool.
+## 1. The element schema
 
-## 1. Scoped tools
+Both `addElements` and (a nullable variant of) `updateElements` use the same shape. Defining it once means the agent sees the same field names whether it's creating or editing.
 
-The new files live under `src/tools/`. Each tool gets its own file because each one has its own schema and example, and putting them next to each other in one file gets noisy fast.
-
-First, the shared element schema in `src/tools/element-schema.ts`. Both `addElements` and (a nullable variant of) `updateElements` use this shape — keeping it in one place means the agent sees the same field names whether it's creating new shapes or editing existing ones:
+**`src/tools/element-schema.ts`**:
 
 ```ts
 import { z } from "zod";
 
 export const elementSchema = z.object({
-  id: z.string().describe("Unique identifier. Pick concise ids that hint at meaning, like 'rect_login' or 'arrow_login_db'."),
+  id: z.string(),
   type: z.enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line"]),
-  x: z.number().describe("X position in pixels"),
-  y: z.number().describe("Y position in pixels"),
-  width: z.number().describe("Width in pixels"),
-  height: z.number().describe("Height in pixels"),
-  strokeColor: z.string().default("#1e1e1e").describe("Stroke color (hex)"),
-  backgroundColor: z.string().default("transparent").describe("Fill color"),
-  fillStyle: z.enum(["solid", "hachure", "cross-hatch"]).default("solid"),
-  strokeWidth: z.number().default(2),
-  roughness: z.number().default(1).describe("0 for clean, 1 for sketchy"),
-  opacity: z.number().default(100),
-  text: z.string().optional().describe("Text content (for text elements or labels)"),
-  fontSize: z.number().default(20),
-  fontFamily: z.number().default(1).describe("1=Virgil, 2=Helvetica, 3=Cascadia"),
-  textAlign: z.enum(["left", "center", "right"]).default("center"),
-  points: z
-    .array(z.array(z.number()))
-    .optional()
-    .describe("Array of [x,y] points for arrow/line elements"),
-  startBinding: z
-    .object({
-      elementId: z.string(),
-      focus: z.number(),
-      gap: z.number(),
-    })
-    .optional()
-    .describe("Bind arrow start to an element"),
-  endBinding: z
-    .object({
-      elementId: z.string(),
-      focus: z.number(),
-      gap: z.number(),
-    })
-    .optional()
-    .describe("Bind arrow end to an element"),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  strokeColor: z.string().nullable(),
+  backgroundColor: z.string().nullable(),
+  fillStyle: z.enum(["solid", "hachure", "cross-hatch"]).nullable(),
+  strokeWidth: z.number().nullable(),
+  roughness: z.number().nullable(),
+  opacity: z.number().nullable(),
+  text: z.string().nullable(),
+  fontSize: z.number().nullable(),
+  fontFamily: z.number().nullable(),
+  textAlign: z.enum(["left", "center", "right"]).nullable(),
+  points: z.array(z.array(z.number())).nullable(),
+  startBinding: z.object({ elementId: z.string(), focus: z.number(), gap: z.number() }).nullable(),
+  endBinding: z.object({ elementId: z.string(), focus: z.number(), gap: z.number() }).nullable(),
 });
-
-export type ElementInput = z.infer<typeof elementSchema>;
 ```
 
-`src/tools/add-elements.ts`:
+Note **nullable, not optional**. OpenAI's strict mode requires every field present in every call. Null means "not applicable for this element type" (e.g. `points` on a rectangle, `startBinding` on a text). Optional fields fail strict mode.
+
+## 2. Client side CRUD tools
+
+A client side tool is just a tool with **no `execute` function**. The AI SDK pauses the agent loop on the call, streams the call to the browser, the browser does whatever it wants, sends a result back, and the agent continues.
+
+**`src/tools/add-elements.ts`**:
 
 ```ts
 import { tool } from "ai";
@@ -84,7 +54,7 @@ import { z } from "zod";
 import { elementSchema } from "./element-schema";
 
 export const addElements = tool({
-  description: `Add new elements to the canvas. Use this for creating diagrams or adding to an existing one. Each element needs an id, type, position, and size.
+  description: `Add new elements to the canvas. Each element needs an id, type, position, and size.
 
 Example: addElements({ elements: [
   { id: "rect_start", type: "rectangle", x: 100, y: 100, width: 160, height: 80, text: "Start" },
@@ -94,19 +64,12 @@ Example: addElements({ elements: [
   inputSchema: z.object({
     elements: z.array(elementSchema),
   }),
-  execute: async ({ elements }) => {
-    return { elements };
-  },
 });
 ```
 
-Two things to notice:
+The few shot example lives **inside the description**. It travels with the tool. When the model loads this tool's schema it sees the example right next to the parameter list.
 
-**The execute function is a passthrough.** The worker doesn't know what's actually on the canvas — only the browser does. The worker's job is to relay the agent's intent. The browser watches messages, sees `tool-addElements` parts, and applies them via the Excalidraw API. Same pattern as lesson 3, just with three tools instead of one.
-
-**The few shot example lives inside the description.** Not in the system prompt, not in a separate examples file. It travels with the tool. When the model loads this tool's schema it sees the example right there next to the parameter list. This is the cheapest, highest leverage thing you can do for tool reliability.
-
-`src/tools/update-elements.ts` is the same shape, with the nullable fields trick from lesson 2 so OpenAI strict mode stays on:
+**`src/tools/update-elements.ts`**:
 
 ```ts
 const updateFields = z.object({
@@ -129,140 +92,128 @@ export const updateElements = tool({
   description: `Update one or more existing elements by id. Pass null for any field you don't want to change.
 
 Example: updateElements({ updates: [
-  { id: "rect_login", fields: { backgroundColor: "#fa5252", x: null, y: null, width: null, height: null, text: null, fontSize: null, textAlign: null, strokeColor: null, fillStyle: null, strokeWidth: null, roughness: null, opacity: null } }
+  { id: "rect_login", fields: { backgroundColor: "#fa5252", x: null, y: null, ... } }
 ]})`,
   inputSchema: z.object({
-    updates: z.array(z.object({
-      id: z.string(),
-      fields: updateFields,
-    })),
+    updates: z.array(z.object({ id: z.string(), fields: updateFields })),
   }),
-  execute: async ({ updates }) => {
-    // Strip nulls before sending to the client.
-    const cleaned = updates.map(({ id, fields }) => {
-      const filtered: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(fields)) {
-        if (value !== null) filtered[key] = value;
-      }
-      return { id, fields: filtered };
-    });
-    return { updates: cleaned };
-  },
 });
 ```
 
-The big change from lesson 2's `modifyDiagram` is that `updateElements` is **batch**: one tool call can update many elements at once. The old tool only modified one element per call. For a request like "make all the rectangles blue," the old agent had to call `modifyDiagram` N times, burning a turn each. Now it's one call.
+`updateElements` is **batch**: one tool call can update many elements. The lesson 2 `modifyDiagram` was one element per call.
 
-`src/tools/remove-elements.ts` is the smallest:
+**`src/tools/remove-elements.ts`**:
 
 ```ts
-import { tool } from "ai";
-import { z } from "zod";
-
 export const removeElements = tool({
-  description: `Remove elements from the canvas by id. Use this when the user wants to delete shapes. Ids must come from the canvas — call queryCanvas first if you don't know what's there.
+  description: `Remove elements from the canvas by id. Call queryCanvas first if you don't know what's there.
 
 Example: removeElements({ ids: ["rect_old", "arrow_stale"] })`,
   inputSchema: z.object({
-    ids: z.array(z.string()).describe("Array of element ids to remove"),
+    ids: z.array(z.string()),
   }),
-  execute: async ({ ids }) => {
-    return { ids };
-  },
 });
 ```
 
-## 2. The client side tool
+## 3. queryCanvas (also client side)
 
-Lesson 6 sent the canvas state to the worker on every user message via a `data-canvas-state` message part. That worked, but it was wasteful — every turn, even ones that didn't need canvas info, paid the token cost of the full canvas serialization. And it was a hack: the AI SDK protocol doesn't really have a place for "extra payload alongside a user message," so we shoved it into a custom data part the worker had to extract.
-
-The right answer is: let the agent **fetch** canvas state when it needs it, with a tool. And since the canvas only exists in the browser, that tool has to **execute in the browser**. The AI SDK supports this directly via tools with no `execute` function. The protocol pauses the agent loop on the tool call, streams the call to the client, the client runs whatever it wants, sends the result back, and the agent continues.
-
-`src/tools/query-canvas.ts`:
+**`src/tools/query-canvas.ts`**:
 
 ```ts
-import { tool } from "ai";
-import { z } from "zod";
-
 export const queryCanvas = tool({
   description: `Read the current contents of the canvas. Call this when you need to know what elements already exist before adding, modifying, or removing anything. Returns a summary of every element with its id, type, position, and label.
 
 Example: queryCanvas({})`,
   inputSchema: z.object({}),
-  // No execute. The browser handles it.
 });
 ```
 
-That's the whole worker side. No `execute`. The AI SDK sees that and treats this tool as client side. When the model calls it, the worker streams the call out and waits.
+The model only fetches canvas state when it actually needs to. Empty canvas + "draw a flowchart"? No `queryCanvas` call. "Make the login box red"? One `queryCanvas`, then one `updateElements`.
 
-The browser side fulfills it via `useAgentChat`'s `onToolCall` callback. In `src/App.tsx`:
+## 4. Browser side: fulfill all four with onToolCall
+
+**`src/App.tsx`**:
 
 ```tsx
 const { messages, sendMessage, status } = useAgentChat({
   agent,
   onToolCall: async ({ toolCall, addToolOutput }) => {
-    if (toolCall.toolName !== "queryCanvas") return;
     const api = excalidrawAPIRef.current;
-    const elements = api?.getSceneElements() ?? [];
-    addToolOutput({
-      toolCallId: toolCall.toolCallId,
-      output: { summary: serializeCanvasState(elements as unknown[]) },
-    });
+    if (!api) return;
+
+    if (toolCall.toolName === "queryCanvas") {
+      addToolOutput({
+        toolCallId: toolCall.toolCallId,
+        output: { summary: serializeCanvasState(api.getSceneElements() as unknown[]) },
+      });
+      return;
+    }
+
+    if (toolCall.toolName === "addElements") {
+      const { elements } = toolCall.input as { elements: unknown[] };
+      // regenerateIds: false so the agent's chosen ids survive.
+      const newOnes = convertToExcalidrawElements(elements as never, { regenerateIds: false });
+      const next = [...api.getSceneElements(), ...newOnes];
+      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+      api.scrollToContent(next, { fitToContent: true });
+      addToolOutput({ toolCallId: toolCall.toolCallId, output: { added: newOnes.length } });
+      return;
+    }
+
+    if (toolCall.toolName === "updateElements") {
+      const { updates } = toolCall.input as {
+        updates: { id: string; fields: Record<string, unknown> }[];
+      };
+      // Strip nulls. Schema makes the model mention every field; only the
+      // non null ones should actually apply.
+      const byId = new Map(
+        updates.map((u) => {
+          const fields: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(u.fields)) if (v !== null) fields[k] = v;
+          return [u.id, fields];
+        })
+      );
+      const next = api.getSceneElements().map((el) => {
+        const fields = byId.get(el.id);
+        return fields ? newElementWith(el, fields as never) : el;
+      });
+      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+      addToolOutput({ toolCallId: toolCall.toolCallId, output: { updated: byId.size } });
+      return;
+    }
+
+    if (toolCall.toolName === "removeElements") {
+      const { ids } = toolCall.input as { ids: string[] };
+      const remove = new Set(ids);
+      const next = api.getSceneElements().filter((el) => !remove.has(el.id));
+      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+      addToolOutput({ toolCallId: toolCall.toolCallId, output: { removed: remove.size } });
+      return;
+    }
   },
 });
 ```
 
-When the agent calls `queryCanvas`, the browser reads the live scene with `excalidrawAPI.getSceneElements()`, runs the same `serializeCanvasState` from lesson 6 on it, and submits the result. The agent loop resumes automatically (`autoContinueAfterToolResult` is true by default). One round trip, one tool result, the agent proceeds with that string in its context.
+That's all of it. No `useEffect` watcher, no `appliedToolCalls` ref, no message walking. The tool **is** the apply, and the apply returns a real result the agent can read on its next step. If `removeElements` was called on an id that didn't exist, the agent finds out from the result and can react.
 
-**Why this is better than the lesson 6 hack:**
+## 5. searchWeb (server side)
 
-- **Lazy.** The agent only fetches state when it actually needs it. "Draw a flowchart of user signup" on an empty canvas? No queryCanvas call, no token cost. "Make the login box red"? One queryCanvas call, the agent finds the id, then one updateElements call. Done.
-- **No custom protocol.** No `data-canvas-state` message part. No `extractCanvasState` function on the worker. No `sendWithCanvas` wrapper on the client. All deleted.
-- **Always fresh.** The browser is the source of truth. There's no risk of the agent acting on a stale snapshot from a few turns ago.
+The one tool that stays server side. It calls Tavily, an LLM oriented search API: POST a query, get back clean `{title, content, url}` results, no scraping.
 
-The system prompt also changes. Lesson 6 appended a "Current canvas state" section to the system prompt at request time. Lesson 7 drops that entirely and instead instructs the model on **when** to call queryCanvas:
-
-```
-- **Query before you modify.** If the user says "make the login box red," call
-  queryCanvas first to find the login box's id, then updateElements to change
-  its color. Never invent ids.
-```
-
-The model decides the timing. We just have to teach it the policy.
-
-## 3. Web search via Tavily
-
-The third change is `searchWeb`. It's a normal server side tool with an execute function, but the execute calls the Tavily API instead of doing local work. Tavily is purpose built for LLM agents — you POST a query, you get back clean condensed results in `{title, content, url}` shape, no scraping, no parsing, no per page rate limit games. Free tier is 1000 searches/month at tavily.com.
-
-`src/tools/search-web.ts`:
+**`src/tools/search-web.ts`**:
 
 ```ts
-import { tool } from "ai";
-import { z } from "zod";
-
-interface TavilyResult {
-  title?: string;
-  content?: string;
-  url?: string;
-}
-
-interface TavilyResponse {
-  results?: TavilyResult[];
-}
-
 export function makeSearchWeb(apiKey: string | undefined) {
   return tool({
-    description: `Search the web for current information. Use this when the user asks about recent technology, frameworks, services, or systems where you may not have up to date knowledge — for example "draw an architecture diagram of how Cloudflare Workers handle requests" should trigger a search before you start drawing.
+    description: `Search the web for current information. Use this when the user asks about recent technology, frameworks, services, or systems where you may not have up to date knowledge.
 
 Example: searchWeb({ query: "how Cloudflare Workers handle incoming requests", maxResults: 5 })`,
     inputSchema: z.object({
-      query: z.string().describe("Search query"),
-      maxResults: z.number().optional().describe("How many results to return (default 5)"),
+      query: z.string(),
+      maxResults: z.number().nullable(),
     }),
     execute: async ({ query, maxResults }) => {
-      if (!apiKey) {
-        return { error: "Tavily API key is not configured" };
-      }
+      if (!apiKey) return { error: "Tavily API key is not configured" };
       try {
         const response = await fetch("https://api.tavily.com/search", {
           method: "POST",
@@ -277,7 +228,7 @@ Example: searchWeb({ query: "how Cloudflare Workers handle incoming requests", m
         if (!response.ok) {
           return { error: `Tavily returned ${response.status}: ${await response.text()}` };
         }
-        const data = (await response.json()) as TavilyResponse;
+        const data = (await response.json()) as { results?: { title?: string; content?: string; url?: string }[] };
         const results = (data.results ?? []).map((r) => ({
           title: r.title ?? "",
           content: r.content ?? "",
@@ -292,27 +243,15 @@ Example: searchWeb({ query: "how Cloudflare Workers handle incoming requests", m
 }
 ```
 
-A few patterns worth pointing out:
+Two patterns worth pointing out:
 
-**Errors return, they don't throw.** A network failure, a missing key, a 429 from Tavily — every one of those becomes `{ error: "..." }`. The agent reads the error in its tool result, decides what to do (retry with a different query, give up, ask the user), and keeps going. If we threw, the whole agent loop would crash. Tools that talk to the network MUST do this. Doesn't matter what the network does, your agent shouldn't die.
+**Errors return, they don't throw.** A network failure becomes `{ error: "..." }`. The agent reads the error in its tool result and decides what to do. Throwing would crash the agent loop.
 
-**The result is condensed before it leaves.** Tavily returns more fields than this — relevance scores, raw content lengths, timestamps. We strip everything except `title`, `content`, `url`. The model only needs those to decide what to draw. Sending the rest costs tokens for no benefit. **Always condense external API responses before feeding them back to the model.**
+**Condense external API responses before returning them.** Tavily returns more fields than this. We strip everything except `title`, `content`, `url`. Always do this with external APIs, you're paying tokens for everything you pass through.
 
-**Factory function for env injection.** `makeSearchWeb(apiKey)` returns a tool. We can't reach into a Worker's `env` from a top level export, so we build the tool inside the agent's `onChatMessage` and pass it the key. This is a common pattern when tool execute functions need request scoped config.
+## 6. Wiring
 
-### Why search lives in tools vs context vs RAG
-
-Three different ways to get external information into the model. They have different patterns.
-
-- **Context (lesson 6)**: facts the model needs *every turn*. The system prompt, the canvas state (when it was a context thing, not a tool), the user role. Cheap to retrieve, expensive to send because it bloats every request. Use this when the answer is "always."
-- **Tools (this lesson)**: facts the model fetches *on demand* when it decides it needs them. The model controls the trigger. Web search, database lookups, file reads, API calls. Use this when the answer is "sometimes, and the model will know when."
-- **RAG (lesson 8)**: facts retrieved from *your own corpus* via embedding similarity. Same on demand pattern as tools, but the data source is your own vector store instead of the open web. Use this when the answer lives in private data the model doesn't know.
-
-`searchWeb` is the simplest version of "model decides to fetch." Lesson 8 swaps the data source for an internal one and adds the embedding step, but the trigger is the same shape.
-
-## Wiring it all together
-
-`src/tools.ts` becomes a barrel that re exports everything as a single tool set, plus a `buildTools(env)` factory for the request scoped Tavily key:
+**`src/tools.ts`**:
 
 ```ts
 import { addElements } from "./tools/add-elements";
@@ -332,15 +271,14 @@ export function buildTools(env: { TAVILY_API_KEY?: string }) {
 }
 ```
 
-`src/agent.ts` shrinks. No more `extractCanvasState`. No more `canvasState` plumbing. Just hand the env to streamAgent and let the tool layer handle everything:
+**`src/agent.ts`** shrinks. No more canvas state plumbing.
 
 ```ts
 export class DesignAgent extends AIChatAgent<Env> {
   async onChatMessage() {
     const openai = createOpenAI({ apiKey: this.env.OPENAI_API_KEY });
     const model = openai("gpt-5.4-mini");
-    const allMessages = await convertToModelMessages(this.messages);
-    const messages = await compactHistory(allMessages, { model });
+    const messages = await convertToModelMessages(this.messages);
     const result = streamAgent({
       model,
       messages,
@@ -351,173 +289,76 @@ export class DesignAgent extends AIChatAgent<Env> {
 }
 ```
 
-`src/agent-core.ts` drops `buildSystem` and the canvas state argument. The system prompt is the same string for every request now. The tool wiring uses `buildTools(env)`. The eval variant of `runAgent` builds eval only versions of every tool that mutate an in memory `sim` array, including a `queryCanvas` *with* an execute function (because the eval has no browser to fulfill it):
+## 7. Eval
+
+The eval has no browser, so the four client side tools have to be simulated headless. `runAgent` builds eval only versions with `execute` functions that mutate an in memory `sim` array. This pattern shows up again any time you have client side tools and a headless eval.
 
 ```ts
-const sim: Record<string, unknown>[] = (seedCanvas as Record<string, unknown>[]).map((el) => ({ ...el }));
+const sim: any[] = [...seedCanvas];
 
-const baseTools = buildTools(env);
 const evalTools = {
   addElements: tool({
     description: baseTools.addElements.description,
     inputSchema: baseTools.addElements.inputSchema as never,
-    execute: async ({ elements }: { elements: unknown[] }) => {
-      for (const el of elements) sim.push({ ...(el as object) });
-      return { elements };
+    execute: async ({ elements }: { elements: any[] }) => {
+      for (const el of elements) sim.push({ ...el });
+      return { added: elements.length };
     },
   }),
-  updateElements: tool({
-    description: baseTools.updateElements.description,
-    inputSchema: baseTools.updateElements.inputSchema as never,
-    execute: async ({ updates }: { updates: { id: string; fields: Record<string, unknown> }[] }) => {
-      const cleaned = updates.map(({ id, fields }) => {
-        const filtered: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(fields)) {
-          if (value !== null) filtered[key] = value;
-        }
-        return { id, fields: filtered };
-      });
-      for (const { id, fields } of cleaned) {
-        const target = sim.find((el) => el.id === id);
-        if (target) Object.assign(target, fields);
-      }
-      return { updates: cleaned };
-    },
-  }),
-  removeElements: tool({
-    description: baseTools.removeElements.description,
-    inputSchema: baseTools.removeElements.inputSchema as never,
-    execute: async ({ ids }: { ids: string[] }) => {
-      for (const id of ids) {
-        const idx = sim.findIndex((el) => el.id === id);
-        if (idx >= 0) sim.splice(idx, 1);
-      }
-      return { ids };
-    },
-  }),
-  queryCanvas: tool({
-    description: baseTools.queryCanvas.description,
-    inputSchema: z.object({}),
-    execute: async () => ({ summary: serializeCanvasState(sim) }),
-  }),
+  // ... updateElements, removeElements, queryCanvas similarly
   searchWeb: baseTools.searchWeb,
 };
 ```
 
-This is the recurring pattern: the eval has to *simulate* whatever the browser does in production, otherwise the agent loop hangs on the client side tool. Worth understanding because we'll do it again in lesson 9.
+We also expose the flat list of tool names called across the run, so the new scorer can check tool choice:
 
-`src/App.tsx` gets the new tool handlers and the `onToolCall` for queryCanvas. The full message watcher in `App.tsx`:
-
-```tsx
-useEffect(() => {
-  if (!excalidrawAPI) return;
-
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const part of message.parts ?? []) {
-      const type = (part as { type?: string }).type;
-      if (
-        type !== "tool-addElements" &&
-        type !== "tool-updateElements" &&
-        type !== "tool-removeElements"
-      ) {
-        continue;
-      }
-      const p = part as {
-        type: string;
-        toolCallId: string;
-        state: string;
-        output: unknown;
-      };
-      if (p.state !== "output-available") continue;
-      if (appliedToolCalls.current.has(p.toolCallId)) continue;
-      appliedToolCalls.current.add(p.toolCallId);
-
-      if (p.type === "tool-addElements") {
-        const output = p.output as { elements?: unknown };
-        const skeletons = output?.elements;
-        if (Array.isArray(skeletons) && skeletons.length > 0) {
-          // regenerateIds: false so the agent's chosen ids survive — otherwise
-          // later updateElements/removeElements calls (which use those ids) miss.
-          const newOnes = convertToExcalidrawElements(skeletons as never, {
-            regenerateIds: false,
-          });
-          const current = excalidrawAPI.getSceneElements();
-          const next = [...current, ...newOnes];
-          excalidrawAPI.updateScene({
-            elements: next,
-            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-          });
-          excalidrawAPI.scrollToContent(next, { fitToContent: true });
-        }
-      } else if (p.type === "tool-updateElements") {
-        const output = p.output as {
-          updates?: { id: string; fields: Record<string, unknown> }[];
-        };
-        const updates = output?.updates;
-        if (Array.isArray(updates) && updates.length > 0) {
-          const byId = new Map(updates.map((u) => [u.id, u.fields]));
-          const current = excalidrawAPI.getSceneElements();
-          const next = current.map((el) => {
-            const fields = byId.get(el.id);
-            return fields ? newElementWith(el, fields as never) : el;
-          });
-          excalidrawAPI.updateScene({
-            elements: next,
-            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-          });
-        }
-      } else if (p.type === "tool-removeElements") {
-        const output = p.output as { ids?: string[] };
-        const ids = new Set(output?.ids ?? []);
-        if (ids.size > 0) {
-          const current = excalidrawAPI.getSceneElements();
-          const next = current.filter((el) => !ids.has(el.id));
-          excalidrawAPI.updateScene({
-            elements: next,
-            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-          });
-        }
-      }
-    }
-  }
-}, [messages, excalidrawAPI]);
+```ts
+const toolCalls: string[] = [];
+for (const step of result.steps) {
+  for (const call of step.toolCalls ?? []) toolCalls.push(call.toolName);
+}
+return { text: result.text, elements: sim, toolCalls, steps: result.steps };
 ```
 
-Three parallel branches for the three mutating tools, all guarded by the `appliedToolCalls` set so we don't double apply on rerender. Same `regenerateIds: false`, `newElementWith`, `CaptureUpdateAction.IMMEDIATELY` invariants from the earlier lessons.
+### New scorer: ToolChoice
 
-## Eval
+The Preservation scorer is gone. It was tied to the old `modifyDiagram` tool surface and once `extractElements` simulated the canvas headlessly it stopped meaning much. We replace it with a scorer that checks **tool choice** against the test case `category` already in golden, no dataset changes needed.
 
-Run the eval on lesson 8 (where the solution lives) and compare against lesson 6:
+**`evals/scorers/toolChoice.ts`**:
 
-| Scorer | Lesson 6 | Lesson 7 | Δ |
-|---|---|---|---|
-| Schema | 100% | 100% | 0 |
-| LabelKeywords | 94% | 93% | -1 |
-| Structure | 67% | 67% | 0 |
-| **Preservation** | **50%** | **100%** | **+50** |
-| Duration | (baseline) | -41% | faster |
+```ts
+export const toolChoiceScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
+  output,
+  expected,
+}) => {
+  const calls = output.toolCalls ?? [];
+  const category = expected?.category;
 
-Preservation **doubled to 100 percent**. The agent now perfectly preserves seed elements on modify cases because `addElements` is purely additive — there's no way to clobber existing elements anymore. The only path to losing an element is to call `removeElements` on its id, which the agent only does when the user asks. Schema and Structure stay flat (they were already topped out), LabelKeywords drifts down a hair (noise — eval scores will differ run to run, the absolute number matters less than the trend on the scorer that was actually broken).
+  if (category === "create" || category === "domain") {
+    const ok = calls.includes("addElements");
+    return { name: "ToolChoice", score: ok ? 1 : 0, metadata: { category, calls } };
+  }
 
-Duration dropped 41 percent. Two reasons: most turns no longer pay the canvas serialization tax in the system prompt, and modify cases are now one tool call instead of N.
+  if (category === "modify") {
+    const queryAt = calls.indexOf("queryCanvas");
+    const firstMutator = calls.findIndex(
+      (n) => n === "updateElements" || n === "removeElements"
+    );
+    if (firstMutator < 0) return { name: "ToolChoice", score: 0, metadata: { category, calls } };
+    if (queryAt < 0 || queryAt > firstMutator) {
+      return { name: "ToolChoice", score: 0.5, metadata: { category, calls, reason: "mutated without querying first" } };
+    }
+    return { name: "ToolChoice", score: 1, metadata: { category, calls } };
+  }
 
-**Your numbers will differ.** What matters: Preservation should jump from roughly half to roughly all, and the others should stay flat or improve slightly. If Preservation didn't move, something is wrong with the agent loop — most likely the agent isn't calling queryCanvas before updateElements, or the eval `evalTools.queryCanvas` isn't reading from `sim` correctly.
+  return null;
+};
+```
 
-## Things that didn't make the cut
+The rules, by category:
 
-The original lesson 7 plan had a tool registry (search for relevant tools per request) and a sandboxed code execution tool (let the agent write JS for repetitive layouts). Both got cut.
+- **create** / **domain**: `addElements` must be called.
+- **modify**: at least one of `updateElements` or `removeElements` must be called, and `queryCanvas` must come **before** the first mutation. If the agent mutates without querying first, that's half credit because it's hallucinating ids.
+- **edge**: returns null and Braintrust skips it.
 
-**Tool registry**: only worth it once you have ~20+ tools. With six, keyword search is over engineering. The model can hold all six tool definitions in context with no issue. We'll revisit registries in a later lesson if the surface grows.
-
-**Code sandbox**: interesting, but the safety story on Cloudflare Workers is awkward (no real preemption for sync code, the "5 second timeout" is advisory at best), and the use cases overlap with what `addElements` already does well via batch input. Cut for simplicity. If you want this, the right place is a local Node sandbox inside your eval harness, not the production worker.
-
-## Recap
-
-- Replaced two coarse tools with three focused CRUD tools and a query tool.
-- The query tool runs in the browser via the AI SDK's no execute pattern. Goodbye `data-canvas-state` hack.
-- Added a real external API tool (Tavily web search) with proper error handling and result condensation.
-- Eval went from 50 to 100 on Preservation, the scorer that was actually broken.
-- The system prompt got *smaller*, not bigger, because the agent now reads canvas state on demand instead of receiving it on every turn.
-
-Lesson 8 picks up here and adds RAG: same on demand pattern, but the data source is a private vector store instead of the open web.
+Add it to the eval scorer list and drop `preservationScorer`. Run the eval, compare against the lesson 6 baseline. Schema, LabelKeywords, and Structure should hold or improve. ToolChoice is a fresh metric with no historical comparison.
