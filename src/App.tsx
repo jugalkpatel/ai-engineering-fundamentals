@@ -81,9 +81,75 @@ export default function App() {
         // to send every field, but the skeleton helper expects undefined
         // (not null) for "use the default" and chokes on `label: null` or
         // `start: null`.
-        const cleaned = elements.map(stripNulls);
+        const cleaned = elements.map(stripNulls) as Record<string, unknown>[];
         const newOnes = convertToExcalidrawElements(cleaned as never, { regenerateIds: false });
-        const next = [...api.getSceneElements(), ...newOnes];
+
+        // Cross call binding fix.
+        // convertToExcalidrawElements only resolves arrow start/end ids
+        // against elements in its OWN input batch. When the model splits a
+        // diagram across multiple addElements calls (rectangles in call 1,
+        // arrows in call 2), the helper drops the arrows' bindings and logs
+        // "No element for start binding with id rect_X found." The runtime
+        // arrow renders unbound and the diagram looks broken.
+        //
+        // The system prompt promises the model "in this call OR on the
+        // canvas." To make that promise honest, we walk the skeleton input
+        // and patch the runtime arrows ourselves: for each arrow whose
+        // start/end id references an element already on the live scene,
+        // restore the binding and update the target shape's boundElements
+        // (Excalidraw uses bidirectional binding tracking).
+        const existingScene = api.getSceneElements();
+        const existingById = new Map(existingScene.map((el) => [el.id, el]));
+        const newById = new Map(
+          (newOnes as Array<{ id: string }>).map((el) => [el.id, el])
+        );
+        const incomingArrowsByTarget = new Map<string, string[]>();
+        for (const skeleton of cleaned) {
+          if (skeleton.type !== "arrow" && skeleton.type !== "line") continue;
+          const arrow = newById.get(skeleton.id as string) as
+            | Record<string, unknown>
+            | undefined;
+          if (!arrow) continue;
+          const startId = (skeleton.start as { id?: string } | undefined)?.id;
+          if (
+            typeof startId === "string" &&
+            existingById.has(startId) &&
+            !arrow.startBinding
+          ) {
+            arrow.startBinding = { elementId: startId, focus: 0, gap: 8 };
+            const list = incomingArrowsByTarget.get(startId) ?? [];
+            list.push(skeleton.id as string);
+            incomingArrowsByTarget.set(startId, list);
+          }
+          const endId = (skeleton.end as { id?: string } | undefined)?.id;
+          if (
+            typeof endId === "string" &&
+            existingById.has(endId) &&
+            !arrow.endBinding
+          ) {
+            arrow.endBinding = { elementId: endId, focus: 0, gap: 8 };
+            const list = incomingArrowsByTarget.get(endId) ?? [];
+            list.push(skeleton.id as string);
+            incomingArrowsByTarget.set(endId, list);
+          }
+        }
+        // Patch boundElements on existing target shapes so Excalidraw's
+        // bidirectional binding tracking sees the new arrows.
+        const patchedExisting = existingScene.map((el) => {
+          const incoming = incomingArrowsByTarget.get(el.id);
+          if (!incoming || incoming.length === 0) return el;
+          const prev = ((el as unknown as { boundElements?: readonly { id: string; type: string }[] })
+            .boundElements ?? []) as readonly { id: string; type: string }[];
+          const merged: { id: string; type: string }[] = [
+            ...prev,
+            ...incoming
+              .filter((id) => !prev.some((b) => b.id === id))
+              .map((id) => ({ id, type: "arrow" })),
+          ];
+          return newElementWith(el, { boundElements: merged } as never);
+        });
+
+        const next = [...patchedExisting, ...newOnes];
         api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
         api.scrollToContent(next, { fitToContent: true });
         // Detect overlaps in the post-add scene and surface them in the
