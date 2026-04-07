@@ -14,8 +14,7 @@ import "./App.css";
 
 // One agent instance per page load. The canvas state lives only in the
 // browser, so persisting chat history across refreshes would leave a dead
-// conversation referencing diagrams that no longer exist. Generated at the
-// module level so React StrictMode's double mount doesn't change it.
+// conversation referencing diagrams that no longer exist.
 const sessionId = crypto.randomUUID();
 
 export default function App() {
@@ -23,13 +22,8 @@ export default function App() {
     useState<ExcalidrawImperativeAPI | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
-  // Track which tool calls we've already applied so we don't double-apply
-  // when messages re-render.
-  const appliedToolCalls = useRef<Set<string>>(new Set());
-
-  // Hold the latest excalidrawAPI in a ref so the onToolCall callback (which
-  // is captured once at hook init time) can always read the live API instead
-  // of a stale closure copy.
+  // Hold the latest excalidrawAPI in a ref so onToolCall (captured once at
+  // hook init) always reads the live API instead of a stale closure copy.
   const excalidrawAPIRef = useRef<ExcalidrawImperativeAPI | null>(null);
   useEffect(() => {
     excalidrawAPIRef.current = excalidrawAPI;
@@ -41,101 +35,67 @@ export default function App() {
 
   const agent = useAgent({ agent: "design-agent", name: sessionId });
 
-  // useAgentChat manages the chat protocol on top of the agent connection.
-  // We register an onToolCall handler to fulfill the queryCanvas client tool:
-  // when the agent calls queryCanvas, the worker streams the call here, we
-  // read the live scene, and submit the result back. The agent loop resumes
-  // automatically (autoContinueAfterToolResult is true by default).
+  // All four canvas tools are client side. The worker streams the call here,
+  // we apply it to the live Excalidraw scene, and return a result the agent
+  // sees on its next step.
   const { messages, sendMessage, status } = useAgentChat({
     agent,
     onToolCall: async ({ toolCall, addToolOutput }) => {
-      if (toolCall.toolName !== "queryCanvas") return;
       const api = excalidrawAPIRef.current;
-      const elements = api?.getSceneElements() ?? [];
-      addToolOutput({
-        toolCallId: toolCall.toolCallId,
-        output: { summary: serializeCanvasState(elements as unknown[]) },
-      });
+      if (!api) return;
+
+      if (toolCall.toolName === "queryCanvas") {
+        addToolOutput({
+          toolCallId: toolCall.toolCallId,
+          output: { summary: serializeCanvasState(api.getSceneElements() as unknown[]) },
+        });
+        return;
+      }
+
+      if (toolCall.toolName === "addElements") {
+        const { elements } = toolCall.input as { elements: unknown[] };
+        // regenerateIds: false so the agent's chosen ids survive, otherwise
+        // later updateElements/removeElements calls miss.
+        const newOnes = convertToExcalidrawElements(elements as never, { regenerateIds: false });
+        const next = [...api.getSceneElements(), ...newOnes];
+        api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+        api.scrollToContent(next, { fitToContent: true });
+        addToolOutput({ toolCallId: toolCall.toolCallId, output: { added: newOnes.length } });
+        return;
+      }
+
+      if (toolCall.toolName === "updateElements") {
+        const { updates } = toolCall.input as {
+          updates: { id: string; fields: Record<string, unknown> }[];
+        };
+        // Strip nulls. The schema makes the model mention every field; only
+        // the non null ones should actually apply.
+        const byId = new Map(
+          updates.map((u) => {
+            const fields: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(u.fields)) if (v !== null) fields[k] = v;
+            return [u.id, fields];
+          })
+        );
+        const next = api.getSceneElements().map((el) => {
+          const fields = byId.get(el.id);
+          return fields ? newElementWith(el, fields as never) : el;
+        });
+        api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+        addToolOutput({ toolCallId: toolCall.toolCallId, output: { updated: byId.size } });
+        return;
+      }
+
+      if (toolCall.toolName === "removeElements") {
+        const { ids } = toolCall.input as { ids: string[] };
+        const remove = new Set(ids);
+        const next = api.getSceneElements().filter((el) => !remove.has(el.id));
+        api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+        addToolOutput({ toolCallId: toolCall.toolCallId, output: { removed: remove.size } });
+        return;
+      }
     },
   });
-
-  // Watch messages for the three mutating server tools and apply them to the
-  // live canvas. The worker side just relays intent — actual scene mutation
-  // is the browser's job, since only the browser owns the Excalidraw store.
-  useEffect(() => {
-    if (!excalidrawAPI) return;
-
-    for (const message of messages) {
-      if (message.role !== "assistant") continue;
-      for (const part of message.parts ?? []) {
-        const type = (part as { type?: string }).type;
-        if (
-          type !== "tool-addElements" &&
-          type !== "tool-updateElements" &&
-          type !== "tool-removeElements"
-        ) {
-          continue;
-        }
-        const p = part as {
-          type: string;
-          toolCallId: string;
-          state: string;
-          output: unknown;
-        };
-        if (p.state !== "output-available") continue;
-        if (appliedToolCalls.current.has(p.toolCallId)) continue;
-        appliedToolCalls.current.add(p.toolCallId);
-
-        if (p.type === "tool-addElements") {
-          const output = p.output as { elements?: unknown };
-          const skeletons = output?.elements;
-          if (Array.isArray(skeletons) && skeletons.length > 0) {
-            // Convert skeletons into full Excalidraw elements. regenerateIds
-            // false so the agent's chosen ids survive — otherwise later
-            // updateElements/removeElements calls (which use those ids) miss.
-            const newOnes = convertToExcalidrawElements(skeletons as never, {
-              regenerateIds: false,
-            });
-            const current = excalidrawAPI.getSceneElements();
-            const next = [...current, ...newOnes];
-            excalidrawAPI.updateScene({
-              elements: next,
-              captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-            });
-            excalidrawAPI.scrollToContent(next, { fitToContent: true });
-          }
-        } else if (p.type === "tool-updateElements") {
-          const output = p.output as {
-            updates?: { id: string; fields: Record<string, unknown> }[];
-          };
-          const updates = output?.updates;
-          if (Array.isArray(updates) && updates.length > 0) {
-            const byId = new Map(updates.map((u) => [u.id, u.fields]));
-            const current = excalidrawAPI.getSceneElements();
-            const next = current.map((el) => {
-              const fields = byId.get(el.id);
-              return fields ? newElementWith(el, fields as never) : el;
-            });
-            excalidrawAPI.updateScene({
-              elements: next,
-              captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-            });
-          }
-        } else if (p.type === "tool-removeElements") {
-          const output = p.output as { ids?: string[] };
-          const ids = new Set(output?.ids ?? []);
-          if (ids.size > 0) {
-            const current = excalidrawAPI.getSceneElements();
-            const next = current.filter((el) => !ids.has(el.id));
-            excalidrawAPI.updateScene({
-              elements: next,
-              captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-            });
-          }
-        }
-      }
-    }
-  }, [messages, excalidrawAPI]);
 
   return (
     <div className={`app ${theme}`}>

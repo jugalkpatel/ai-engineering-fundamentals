@@ -172,9 +172,17 @@ export async function runAgent({
     stopWhen: stepCountIs(maxSteps),
   });
 
+  // Flatten tool names called across all steps, in order. The eval scorers
+  // use this to check whether the agent reached for the right tool.
+  const toolCalls: string[] = [];
+  for (const step of result.steps) {
+    for (const call of step.toolCalls ?? []) toolCalls.push(call.toolName);
+  }
+
   return {
     text: result.text,
     elements: sim,
+    toolCalls,
     steps: result.steps,
   };
 }

@@ -2,13 +2,9 @@ import { tool } from "ai";
 import { z } from "zod";
 import { elementSchema } from "./element-schema";
 
-// Adds new elements to the canvas. The execute function is a passthrough —
-// the actual scene mutation happens in the browser when App.tsx sees the
-// tool-addElements part on a message and applies it via excalidrawAPI.
-//
-// Why passthrough on the worker: the worker doesn't have access to the live
-// Excalidraw scene. It just relays the agent's intent. The browser is the
-// source of truth for what's actually on the canvas.
+// Client side tool: no execute. The browser fulfills it via onToolCall in
+// App.tsx, which appends the new elements to the live Excalidraw scene and
+// returns the result back to the agent.
 
 export const addElements = tool({
   description: `Add new elements to the canvas. Use this for creating diagrams or adding to an existing one. Each element needs an id, type, position, and size.
@@ -21,7 +17,4 @@ Example: addElements({ elements: [
   inputSchema: z.object({
     elements: z.array(elementSchema).describe("Array of new elements to add to the canvas"),
   }),
-  execute: async ({ elements }) => {
-    return { elements };
-  },
 });

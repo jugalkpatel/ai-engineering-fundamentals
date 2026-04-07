@@ -17,7 +17,7 @@ import { runAgent } from "../src/agent-core";
 import { buildMessages, type GoldenTestCase } from "./buildMessages";
 import { schemaScorer, type AgentOutput } from "./scorers/schema";
 import { structureScorer } from "./scorers/structure";
-import { preservationScorer } from "./scorers/preservation";
+import { toolChoiceScorer } from "./scorers/toolChoice";
 import { labelKeywordScorer } from "./scorers/labelKeyword";
 
 config({ path: ".dev.vars" });
@@ -51,8 +51,8 @@ Eval<GoldenTestCase, AgentOutput, GoldenTestCase>("Diagram Agent", {
       seedCanvas: testCase.seed?.elements ?? [],
       env: { TAVILY_API_KEY: process.env.TAVILY_API_KEY },
     });
-    return { text: result.text, elements: result.elements };
+    return { text: result.text, elements: result.elements, toolCalls: result.toolCalls };
   },
 
-  scores: [schemaScorer, structureScorer, preservationScorer, labelKeywordScorer],
+  scores: [schemaScorer, structureScorer, toolChoiceScorer, labelKeywordScorer],
 });

@@ -15,6 +15,7 @@ const VALID_TYPES = ["rectangle", "ellipse", "diamond", "text", "arrow", "line"]
 export interface AgentOutput {
   text: string;
   elements: unknown[];
+  toolCalls: string[];
 }
 
 export const schemaScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
