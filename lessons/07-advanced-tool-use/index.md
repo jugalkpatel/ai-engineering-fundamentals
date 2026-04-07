@@ -202,67 +202,9 @@ function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
 }
 ```
 
-**`src/App.tsx`**:
+The full file lives in the next subsection (the "lesson 6 plumbing goes away" rewrite is the same edit, so we show `App.tsx` once at its final state instead of twice). What follows is the shape of the `onToolCall` body you'll be writing inside that file.
 
-```tsx
-const { messages, sendMessage, status } = useAgentChat({
-  agent,
-  onToolCall: async ({ toolCall, addToolOutput }) => {
-    const api = excalidrawAPIRef.current;
-    if (!api) {
-      addToolOutput({ toolCallId: toolCall.toolCallId, output: { error: "canvas not ready" } });
-      return;
-    }
-
-    if (toolCall.toolName === "queryCanvas") {
-      addToolOutput({
-        toolCallId: toolCall.toolCallId,
-        output: { summary: serializeCanvasState(api.getSceneElements() as unknown[]) },
-      });
-      return;
-    }
-
-    if (toolCall.toolName === "addElements") {
-      const { elements } = toolCall.input as { elements: Record<string, unknown>[] };
-      const cleaned = elements.map(stripNulls);
-      // regenerateIds: false so the agent's chosen ids survive.
-      const newOnes = convertToExcalidrawElements(cleaned as never, { regenerateIds: false });
-      const next = [...api.getSceneElements(), ...newOnes];
-      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-      api.scrollToContent(next, { fitToContent: true });
-      addToolOutput({ toolCallId: toolCall.toolCallId, output: { added: newOnes.length } });
-      return;
-    }
-
-    if (toolCall.toolName === "updateElements") {
-      const { updates } = toolCall.input as {
-        updates: { id: string; fields: Record<string, unknown> }[];
-      };
-      const byId = new Map(updates.map((u) => [u.id, stripNulls(u.fields)]));
-      const next = api.getSceneElements().map((el) => {
-        const fields = byId.get(el.id);
-        return fields && Object.keys(fields).length > 0
-          ? newElementWith(el, fields as never)
-          : el;
-      });
-      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-      addToolOutput({ toolCallId: toolCall.toolCallId, output: { updated: byId.size } });
-      return;
-    }
-
-    if (toolCall.toolName === "removeElements") {
-      const { ids } = toolCall.input as { ids: string[] };
-      const remove = new Set(ids);
-      const next = api.getSceneElements().filter((el) => !remove.has(el.id));
-      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-      addToolOutput({ toolCallId: toolCall.toolCallId, output: { removed: remove.size } });
-      return;
-    }
-  },
-});
-```
-
-That's all of it. The tool **is** the apply, and the apply returns a real result the agent can read on its next step. If `removeElements` was called on an id that didn't exist, the agent finds out from the result and can react.
+Each branch reads the tool name, applies the change to the scene, and submits a result via `addToolOutput`. The tool **is** the apply, and the apply returns a real result the agent can read on its next step. If `removeElements` was called on an id that doesn't exist, the agent sees `{ removed: 0 }` and can react.
 
 ### The lesson 6 plumbing goes away
 
