@@ -45,16 +45,8 @@ export default defineConfig({
           },
           { text: "09. RAG", link: "/09-rag/" },
           {
-            text: "10. Human in the Loop",
-            link: "/10-human-in-the-loop/",
-          },
-          {
-            text: "11. Agent Architectures",
-            link: "/11-agent-architectures/",
-          },
-          {
-            text: "12. The Data Flywheel",
-            link: "/12-the-data-flywheel/",
+            text: "10. Where to Go Next",
+            link: "/10-where-to-go-next/",
           },
         ],
       },
