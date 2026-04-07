@@ -29,7 +29,7 @@ config({ path: ".dev.vars" });
 const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const testCases: GoldenTestCase[] = JSON.parse(
-  readFileSync(join("evals", "datasets", "golden.json"), "utf-8")
+  readFileSync(join("evals", "datasets", "golden_2.json"), "utf-8")
 );
 
 Eval<GoldenTestCase, AgentOutput, GoldenTestCase>("Diagram Agent", {
