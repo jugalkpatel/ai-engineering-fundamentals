@@ -19,6 +19,8 @@ import { schemaScorer, type AgentOutput } from "./scorers/schema";
 import { structureScorer } from "./scorers/structure";
 import { preservationScorer } from "./scorers/preservation";
 import { labelKeywordScorer } from "./scorers/labelKeyword";
+import { boundArrowsScorer } from "./scorers/boundArrows";
+import { connectivityScorer } from "./scorers/connectivity";
 
 config({ path: ".dev.vars" });
 
@@ -49,5 +51,12 @@ Eval<GoldenTestCase, AgentOutput, GoldenTestCase>("Diagram Agent", {
     return { text: result.text, elements: result.elements };
   },
 
-  scores: [schemaScorer, structureScorer, preservationScorer, labelKeywordScorer],
+  scores: [
+    schemaScorer,
+    structureScorer,
+    preservationScorer,
+    labelKeywordScorer,
+    boundArrowsScorer,
+    connectivityScorer,
+  ],
 });
