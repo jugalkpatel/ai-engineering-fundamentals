@@ -42,6 +42,8 @@ export const elementSchema = z.object({
 
 Note **nullable, not optional**. OpenAI's strict mode requires every field present in every call. Null means "not applicable for this element type" (e.g. `points` on a rectangle, `startBinding` on a text). Optional fields fail strict mode.
 
+Speaking of strict mode: the AI SDK exposes it as a per tool flag, [documented here](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling). We pass `strict: true` on every canvas tool. With strict mode plus a fully nullable schema, OpenAI's structured outputs are constrained to schemas that validate exactly, which means the model can never produce a malformed call. You'll see the flag on each tool definition below.
+
 ## 2. Client side CRUD tools
 
 A client side tool is just a tool with **no `execute` function**. The AI SDK pauses the agent loop on the call, streams the call to the browser, the browser does whatever it wants, sends a result back, and the agent continues.
@@ -64,6 +66,7 @@ Example: addElements({ elements: [
   inputSchema: z.object({
     elements: z.array(elementSchema),
   }),
+  strict: true,
 });
 ```
 
@@ -97,6 +100,7 @@ Example: updateElements({ updates: [
   inputSchema: z.object({
     updates: z.array(z.object({ id: z.string(), fields: updateFields })),
   }),
+  strict: true,
 });
 ```
 
@@ -112,6 +116,7 @@ Example: removeElements({ ids: ["rect_old", "arrow_stale"] })`,
   inputSchema: z.object({
     ids: z.array(z.string()),
   }),
+  strict: true,
 });
 ```
 
@@ -134,8 +139,8 @@ The model only fetches canvas state when it actually needs to. Empty canvas + "d
 
 Two patterns to know up front:
 
-- **Return the output from `onToolCall`.** The AI SDK auto submits whatever you return as the tool result. Don't use the `addToolOutput` helper for this case. Returning is the standard path and it avoids re-entering the chat state machine, which causes infinite update loops with multiple client tools.
-- **Strip null fields before handing data to Excalidraw.** Our schemas use nullable rather than optional, so the agent always sends every field. Excalidraw expects `undefined` for "use the default," not `null`, and a `points: null` on a rectangle (or `startBinding: null` on a non arrow) will crash `convertToExcalidrawElements`.
+- **Use `addToolOutput` to submit results**, per the [Cloudflare Agents docs](https://developers.cloudflare.com/agents/api-reference/chat-agents/#client-side-tools). The chat protocol pauses on the tool call, you call `addToolOutput({ toolCallId, output })`, and the loop resumes.
+- **Strip null fields before handing data to Excalidraw.** Our schemas use nullable rather than optional, so the agent always sends every field. Excalidraw expects `undefined` for "use the default," not `null`, and a `points: null` on a rectangle (or `startBinding: null` on a non arrow) will crash `convertToExcalidrawElements`. If `onToolCall` throws, the tool call never gets a result, and the chat library cascades into a duplicate key + infinite update mess.
 
 A small helper takes care of the second one:
 
@@ -154,12 +159,19 @@ function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
 ```tsx
 const { messages, sendMessage, status } = useAgentChat({
   agent,
-  onToolCall: async ({ toolCall }) => {
+  onToolCall: async ({ toolCall, addToolOutput }) => {
     const api = excalidrawAPIRef.current;
-    if (!api) return { error: "canvas not ready" };
+    if (!api) {
+      addToolOutput({ toolCallId: toolCall.toolCallId, output: { error: "canvas not ready" } });
+      return;
+    }
 
     if (toolCall.toolName === "queryCanvas") {
-      return { summary: serializeCanvasState(api.getSceneElements() as unknown[]) };
+      addToolOutput({
+        toolCallId: toolCall.toolCallId,
+        output: { summary: serializeCanvasState(api.getSceneElements() as unknown[]) },
+      });
+      return;
     }
 
     if (toolCall.toolName === "addElements") {
@@ -170,7 +182,8 @@ const { messages, sendMessage, status } = useAgentChat({
       const next = [...api.getSceneElements(), ...newOnes];
       api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
       api.scrollToContent(next, { fitToContent: true });
-      return { added: newOnes.length };
+      addToolOutput({ toolCallId: toolCall.toolCallId, output: { added: newOnes.length } });
+      return;
     }
 
     if (toolCall.toolName === "updateElements") {
@@ -185,7 +198,8 @@ const { messages, sendMessage, status } = useAgentChat({
           : el;
       });
       api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-      return { updated: byId.size };
+      addToolOutput({ toolCallId: toolCall.toolCallId, output: { updated: byId.size } });
+      return;
     }
 
     if (toolCall.toolName === "removeElements") {
@@ -193,10 +207,9 @@ const { messages, sendMessage, status } = useAgentChat({
       const remove = new Set(ids);
       const next = api.getSceneElements().filter((el) => !remove.has(el.id));
       api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-      return { removed: remove.size };
+      addToolOutput({ toolCallId: toolCall.toolCallId, output: { removed: remove.size } });
+      return;
     }
-
-    return { error: `unknown tool: ${toolCall.toolName}` };
   },
 });
 ```
