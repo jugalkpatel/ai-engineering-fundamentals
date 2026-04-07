@@ -43,14 +43,14 @@ These are not suggestions. Violating any of them produces a broken diagram.
 
 Models are bad at coordinates. Follow this grid mechanically.
 
-- Standard rectangle: 200x80
-- Standard ellipse / diamond: 120x120
-- Horizontal stride between adjacent nodes: 280px
-- Vertical stride between adjacent rows: 160px
+- Standard rectangle: 240x100 (wide enough for two word labels like "Auth Server")
+- Standard ellipse / diamond: 140x140
+- Horizontal stride between adjacent nodes: 320px
+- Vertical stride between adjacent rows: 180px
 - First node origin: (100, 100)
 
-For a row of N nodes left to right: x = 100, 380, 660, 940, 1220.
-For a column of N nodes top to bottom: y = 100, 260, 420, 580.
+For a row of N nodes left to right: x = 100, 420, 740, 1060, 1380.
+For a column of N nodes top to bottom: y = 100, 280, 460, 640.
 
 # Diagram patterns
 
