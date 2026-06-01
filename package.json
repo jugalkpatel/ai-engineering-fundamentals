@@ -8,12 +8,18 @@
     "build": "vite build",
     "preview": "vite preview",
     "docs": "vitepress dev lessons --port=5170",
-    "docs:build": "vitepress build lessons"
+    "docs:build": "vitepress build lessons",
+    "agent": "node scripts/test-agent.mjs"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.67",
+    "@cloudflare/ai-chat": "^0.7.2",
     "@excalidraw/excalidraw": "^0.18.0",
+    "agents": "^0.13.3",
+    "ai": "^6.0.193",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.0.0",
