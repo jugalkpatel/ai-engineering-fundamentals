@@ -200,7 +200,7 @@ export default function Canvas({ onApiReady, onThemeChange }: CanvasProps) {
       apiRef.current = api;
       onApiReady?.(api);
     },
-    [onApiReady]
+    [onApiReady],
   );
 
   const handleChange = useCallback(
@@ -210,7 +210,7 @@ export default function Canvas({ onApiReady, onThemeChange }: CanvasProps) {
         onThemeChange?.(appState.theme as "light" | "dark");
       }
     },
-    [onThemeChange]
+    [onThemeChange],
   );
 
   return (
@@ -295,10 +295,10 @@ cp .dev.vars.example .dev.vars
 Then open `.dev.vars` and replace the placeholder with your actual key:
 
 ```
-OPENAI_API_KEY=your-openai-api-key-here
+OPENAI_API_KEY=sk-your-openai-key-here
 ```
 
-You can get an OpenAI API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+You can get an API key at [platform.openai.com](https://platform.openai.com).
 
 ### 3. Start the development server
 
@@ -311,6 +311,7 @@ This starts the Vite dev server with the Cloudflare Worker running locally. Open
 ### 4. Verify everything works
 
 You should see:
+
 - An Excalidraw canvas taking up most of the screen
 - A chat sidebar on the right with a "Describe a diagram..." input
 - The Excalidraw toolbar at the top (shapes, arrows, text, etc.)

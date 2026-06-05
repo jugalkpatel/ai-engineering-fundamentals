@@ -1,4 +1,8 @@
-// typescript type for excalidraw elements
+// Simplified Excalidraw element types for agent tool use.
+// These cover the properties the agent needs to create diagrams.
+// Excalidraw accepts many more properties, but these are the ones
+// that matter for generating diagrams from an LLM.
+
 export interface BaseElement {
   id: string;
   x: number;

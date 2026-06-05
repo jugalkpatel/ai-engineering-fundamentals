@@ -36,10 +36,13 @@ ws.addEventListener("message", (event) => {
   const data = event.data;
   try {
     const parsed = JSON.parse(data);
+
+    // Only print chunks from our request, ignore identity/mcp messages
     if (
       parsed.type === "cf_agent_use_chat_response" &&
       parsed.id === requestId
     ) {
+      // The body contains the streamed chunk
       process.stdout.write(parsed.body);
       if (parsed.done) {
         console.log("\n");
@@ -47,6 +50,7 @@ ws.addEventListener("message", (event) => {
       }
     }
   } catch {
+    // Not JSON, just print it
     process.stdout.write(data);
   }
 });

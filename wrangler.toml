@@ -7,8 +7,8 @@ main = "./src/worker.ts"
 not_found_handling = "single-page-application"
 
 [[durable_objects.bindings]]
-name = 'DesignAgent'
-class_name = 'DesignAgent'
+name = "DesignAgent"
+class_name = "DesignAgent"
 
 [[migrations]]
 tag = "v1"
