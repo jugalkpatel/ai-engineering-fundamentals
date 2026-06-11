@@ -1,6 +1,6 @@
-import { UIMessage } from "ai";
-import MessageBubble from "./MessageBubble";
 import { useEffect, useRef } from "react";
+import type { UIMessage } from "ai";
+import MessageBubble from "./MessageBubble";
 
 interface MessageListProps {
   messages: UIMessage[];

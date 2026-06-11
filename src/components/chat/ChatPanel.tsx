@@ -1,6 +1,6 @@
 import { useState } from "react";
+import type { UIMessage } from "ai";
 import MessageList from "./MessageList";
-import { UIMessage } from "ai";
 import "./chat.css";
 
 interface ChatPanelProps {
@@ -51,8 +51,13 @@ export default function ChatPanel({
           placeholder="Describe a diagram..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          disabled={isStreaming}
         />
-        <button type="submit" className="chat-send-btn">
+        <button
+          type="submit"
+          className="chat-send-btn"
+          disabled={isStreaming || !input.trim()}
+        >
           {isStreaming ? "..." : "Send"}
         </button>
       </form>

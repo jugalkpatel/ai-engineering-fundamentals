@@ -1,7 +1,7 @@
 import type { UIMessage } from "ai";
 import MarkdownRenderer from "./MarkdownRenderer";
-import type { Message } from "./types";
 import ToolStatus from "../streaming/ToolStatus";
+import "../streaming/streaming.css";
 
 interface MessageBubbleProps {
   message: UIMessage;

@@ -1,16 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import {
+  convertToExcalidrawElements,
+  CaptureUpdateAction,
+  newElementWith,
+} from "@excalidraw/excalidraw";
+import { useAgent } from "agents/react";
+import { useAgentChat } from "@cloudflare/ai-chat/react";
 import Canvas from "./components/Canvas";
 import ChatPanel from "./components/chat/ChatPanel";
 import "./App.css";
-import { useAgent } from "agents/react";
-// import { useAgentChat } from "agents/ai-react";
-import { useAgentChat } from "@cloudflare/ai-chat/react";
-import {
-  CaptureUpdateAction,
-  convertToExcalidrawElements,
-  newElementWith,
-} from "@excalidraw/excalidraw";
 
 const sessionId = crypto.randomUUID();
 
@@ -19,8 +18,8 @@ export default function App() {
     useState<ExcalidrawImperativeAPI | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
-  // track which tool calls we've already applied to the canvas so we
-  // don't apply the same elements twice as messages re-render
+  // Track which tool calls we have already applied to the canvas so we
+  // don't apply the same elements twice as messages re-render.
   const appliedToolCalls = useRef<Set<string>>(new Set());
 
   const handleApiReady = useCallback((api: ExcalidrawImperativeAPI) => {
@@ -107,6 +106,11 @@ export default function App() {
       <div className="canvas-container">
         <Canvas onApiReady={handleApiReady} onThemeChange={setTheme} />
       </div>
+      <ChatPanel
+        messages={messages}
+        sendMessage={sendMessage}
+        status={status}
+      />
       <ChatPanel
         messages={messages}
         sendMessage={sendMessage}
