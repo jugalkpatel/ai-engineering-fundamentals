@@ -80,8 +80,7 @@ export const tools = {
     // returns things to LLM, in following we're returning elements to LLM
     // we can also return additional context for LLM in execute function
     execute: async ({ elements }) => {
-      console.log({ elements });
-      return elements;
+      return { elements };
     },
   }),
 

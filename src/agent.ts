@@ -10,7 +10,7 @@ import {
 import { createOpenAI } from "@ai-sdk/openai";
 import { tools } from "./tools";
 
-interface ENV {
+interface ENV extends Cloudflare.Env {
   OPENAI_API_KEY: string;
 }
 

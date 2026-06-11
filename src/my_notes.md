@@ -59,3 +59,18 @@
 - The **attention algorithm** is what unlocked LLMs — its job is to consider all the vectors (characters before and after) in the entire set of input.
 - As conversations grow, the algorithm has to consider more data, which increases **processing time** and **memory usage**.
 - This is why GPUs with more memory perform better for LLMs, and why longer conversations can lead to **more hallucinations** due to increased variance.
+
+### Client-side tool (Top Concept ⬆️)
+
+**What it is:** A tool that the LLM can call to fetch real-time state from your application (e.g., current canvas state, user data, system status).
+
+**When to use it:** When the LLM needs to make decisions or modifications based on current state, but you don't want to send the entire state every turn.
+
+**Example:** In lesson-3, the app couldn't modify diagrams correctly because we weren't giving the LLM the current canvas state. If the LLM had a `getCanvasState()` tool, it could call it when needed, instead of us manually passing state every time.
+
+**Benefits:**
+- **Token efficient** — LLM only fetches state when it actually needs it
+- **Smarter decisions** — LLM can act on accurate, real-time information
+- **Scalable** — Doesn't bloat context size as your app grows
+
+**Key insight:** Instead of pushing data to the LLM, let the LLM pull it when needed.
