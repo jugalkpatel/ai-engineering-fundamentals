@@ -10,3 +10,5 @@ lessons/.vitepress/cache
 notes
 
 CLAUDE.md
+.agents
+skills-lock.json
