@@ -436,6 +436,14 @@ In the next lesson we get all of that. We migrate this custom harness to **[Eval
 
 You needed to build the custom harness first so the framework's pieces have a meaning. Now you are ready to use a real one.
 
+## What is the recommended approach for developing AI agents using evaluations?
+
+The recommended approach is to write evaluations first before building the agent. Start with tools that return hard-coded values, write data sets, run evals against a basic LLM, and then use the evaluation results to guide what functionality to add to the agent. This prevents over-engineering and ensures only necessary, measurable improvements are made.
+
+## How should you prioritize what an AI agent should be capable of doing?
+
+An AI agent should be almost perfect at a very small subset of things (around 10 core capabilities), okay at almost nothing, and really bad at most things. Focus on a specific vertical rather than trying to make the agent good at everything. When adding new capabilities, expect that adding even one new thing could take months of data collection and evaluation without causing regression in existing functionality.
+
 ## What is Next
 
 In the next lesson you migrate this harness to Evalite and add real scorers: code based checks (does the output have the right element types?) and an LLM as judge scorer (using a model to evaluate the diagram against the expected characteristics). You also get a dashboard for free. By the end of lesson 5 you will have your first real automated baseline.
