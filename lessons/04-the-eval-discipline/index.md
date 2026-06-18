@@ -2,9 +2,11 @@
 
 You have a working agent. It generates diagrams. Some look great. Some are a mess. Without a way to **measure** quality, every change you make from here is guesswork. This lesson establishes the discipline that defines the AI engineer role: evals.
 
-## Why Evals Matter
+## What is Evals & Why Evals Matter?
 
-Traditional software has unit tests. Given an input, you assert an exact output. AI systems are **probabilistic**: the same input can produce different outputs run to run. Unit tests cannot tell you if the model got "good enough," and they cannot catch a regression where the model still passes some hard coded check but produces worse results.
+Traditional software has unit tests. Given an input, you assert an exact output.
+
+AI systems are **probabilistic**: the same input can produce different outputs run to run. Unit tests cannot tell you if the model got "good enough," and they cannot catch a regression where the model still passes some hard coded check but produces worse results.
 
 Evals are the AI engineer's test suite. They:
 
@@ -13,16 +15,34 @@ Evals are the AI engineer's test suite. They:
 - **Measure improvement** so when you ship a change, you can prove it helped
 - **Expose weaknesses** by including hard cases that the current system can't handle yet, giving you concrete improvement targets
 
-There is a saying in this field: **if you can't measure it, you can't improve it**. The second half of this course is a series of improvement techniques. None of them mean anything without a number to compare against. That number comes from evals.
+There is a saying in this field: **if you can't measure it, you can't improve it**.
+
+The second half of this course is a series of improvement techniques. None of them mean anything without a number to compare against. That number comes from evals.
 
 ## Golden Datasets
+
+**A familiar analogy:** imagine your web app has 100 screenshot tests, and you undertake a big refactor that swaps the framework underneath — say you migrate from Vue to React. The UI is supposed to look identical; only the implementation changed. The set of screenshots captured from the working Vue app becomes your **golden dataset**: the known-good reference you diff every React build against. If a screenshot no longer matches, the refactor broke something.
+
+Evals measure probabilistic outcomes (better/worse) while unit tests provide binary results (pass/fail).
+
+Evals apply that same idea to a probabilistic system. Instead of pixel-perfect screenshots, the reference is a set of **inputs** (what a user might say) paired with the **characteristics a good output should have**.
+
+Building that set starts with one question: as the creator of this agent, what is it for? Ours generates diagrams. So the next question is, what would a user actually ask it to do? Work through the examples:
+
+- **Things they'll ask for sure** — the core requests the agent exists to handle ("draw a flowchart with three steps").
+- **Things you want to support** — cases at the edge of the agent's purpose that you intend to handle well ("an org chart for a 13-person company").
+- **Things you _don't_ want to support** — requests that are out of scope or ambiguous, where the right behavior is to fail gracefully rather than produce garbage ("draw something").
+
+Each of those becomes a test case in your dataset, and for each one you write down the expected characteristics: what does a good response look like?
+
+A golden dataset, then, is a curated set of outcomes — however you assembled it — that you have validated as accurate and true. It is the reference you measure every future run against.
 
 A **golden dataset** is a curated set of test cases. Each test case has:
 
 - An **input** (what the user might say)
 - **Expected characteristics** (what a good response looks like)
 - **Difficulty** (so you can see where the system is strong and weak)
-- **Category** (so you can spot patterns in failures)
+- **Category** (so you can spot patterns in failures) - categories can bb 'tool coverage', 'not enough context', 'too many tools used'. so we can work on particular category for improvement.
 
 Notice that "expected characteristics" is not "expected output." We're not pinning the agent to one exact answer. We're saying "a good response should have these properties." A flowchart with three boxes connected by arrows is a good response, regardless of the exact pixel positions.
 
@@ -43,7 +63,7 @@ The hard and edge cases are where you'll see the biggest gains in the second hal
 
 In this lesson we set up the harness and **conceptually** establish manual scoring. The way you'd manually score a result is to open the JSON file, read each entry, and assign a score from 1 to 5 along with notes about what worked and what did not. We will not actually do this as a class exercise, because reading raw JSON and editing it by hand is painful and there is no good way to compare runs.
 
-That pain is the point. **In the next lesson we adopt a real eval framework (Evalite) that gives us a dashboard, automated scorers, and run comparison out of the box.** But before we get there, you need to understand what an eval *is* — the dataset, the run loop, the scoring rubric — so the framework's API maps to concepts you already know.
+That pain is the point. **In the next lesson we adopt a real eval framework (Evalite) that gives us a dashboard, automated scorers, and run comparison out of the box.** But before we get there, you need to understand what an eval _is_ — the dataset, the run loop, the scoring rubric — so the framework's API maps to concepts you already know.
 
 ### Pass at k vs pass to the power of k
 
@@ -56,8 +76,8 @@ We won't compute these in this lesson (single run per test case for the baseline
 
 ### Capability vs regression evals
 
-- **Capability evals** measure what the system *can* do. The hard test cases. They tell you "the agent can now handle complex org charts, here is the score."
-- **Regression evals** measure what the system *should still* do. The simple test cases. They tell you "did anything we changed break the basics?"
+- **Capability evals** measure what the system _can_ do. The hard test cases. They tell you "the agent can now handle complex org charts, here is the score."
+- **Regression evals** measure what the system _should still_ do. The simple test cases. They tell you "did anything we changed break the basics?"
 
 A good eval suite has both. Capability evals tell you when you've improved. Regression evals tell you when you've broken something.
 
@@ -65,13 +85,13 @@ A good eval suite has both. Capability evals tell you when you've improved. Regr
 
 A good eval needs a clear rubric so different reviewers (or different LLM judges) score the same way. Here is a 1-5 rubric we will use in this course. We will reference it in lesson 5 when we wire up scorers.
 
-| Score | Meaning |
-|-------|---------|
-| **5** | Excellent. Matches all expected characteristics. Layout is clean, labels are correct, connections are right. |
-| **4** | Good. Matches most characteristics. Minor issues like a slightly off label or imperfect spacing. |
+| Score | Meaning                                                                                                                         |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **5** | Excellent. Matches all expected characteristics. Layout is clean, labels are correct, connections are right.                    |
+| **4** | Good. Matches most characteristics. Minor issues like a slightly off label or imperfect spacing.                                |
 | **3** | Acceptable. The basic structure is there but has noticeable issues: overlapping elements, wrong connections, or missing labels. |
-| **2** | Poor. Recognizable as an attempt but with major problems. Mostly wrong shapes, broken layout, or missing key elements. |
-| **1** | Failed. Empty result, error, or completely wrong (drew a flowchart when asked for an org chart). |
+| **2** | Poor. Recognizable as an attempt but with major problems. Mostly wrong shapes, broken layout, or missing key elements.          |
+| **1** | Failed. Empty result, error, or completely wrong (drew a flowchart when asked for an org chart).                                |
 
 Once you have a rubric, anyone (or anything) scoring the agent's output applies the same criteria. Without one, scores drift and runs aren't comparable.
 
@@ -157,6 +177,20 @@ Here is one simple and one hard test case as a reference:
 ```
 
 The full file has 6 simple, 5 medium, 5 hard, and 3 edge cases. Take 2-3 minutes to skim through it and notice the difficulty progression.
+
+### What is the purpose of the 'expected keywords' field in an eval test case?
+
+The 'expected keywords' field allows for deterministic testing by checking if specific required words appear in the output.
+
+For example, if a user prompt asks to label something 'hello', the word 'hello' must appear in the output for the test to pass, regardless of other characteristics.
+
+### What are the two key metrics typically tracked when running evals over time?
+
+The two key metrics are:
+
+(1) how each individual test case's score changes over time
+
+(2) the average score of all test cases over time. This allows monitoring both specific test case improvements and overall system performance.
 
 ### Extract the system prompt
 
@@ -303,16 +337,18 @@ async function main() {
   writeFileSync(outPath, JSON.stringify(results, null, 2));
 
   console.log(`\nResults written to ${outPath}`);
-  console.log(`\nNext: open the file, review each result, and add score (1-5) and notes.`);
+  console.log(
+    `\nNext: open the file, review each result, and add score (1-5) and notes.`,
+  );
 
   console.log("\n=== Summary ===");
   console.log(`Total: ${results.length}`);
   console.log(`Errors: ${results.filter((r) => r.error).length}`);
   console.log(
-    `Empty results (no elements): ${results.filter((r) => !r.error && r.elements.length === 0).length}`
+    `Empty results (no elements): ${results.filter((r) => !r.error && r.elements.length === 0).length}`,
   );
   const avgDuration = Math.round(
-    results.reduce((sum, r) => sum + r.durationMs, 0) / results.length
+    results.reduce((sum, r) => sum + r.durationMs, 0) / results.length,
   );
   console.log(`Average duration: ${avgDuration}ms`);
 }

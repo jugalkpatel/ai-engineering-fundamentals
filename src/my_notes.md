@@ -69,6 +69,7 @@
 **Example:** In lesson-3, the app couldn't modify diagrams correctly because we weren't giving the LLM the current canvas state. If the LLM had a `getCanvasState()` tool, it could call it when needed, instead of us manually passing state every time.
 
 **Benefits:**
+
 - **Token efficient** — LLM only fetches state when it actually needs it
 - **Smarter decisions** — LLM can act on accurate, real-time information
 - **Scalable** — Doesn't bloat context size as your app grows
