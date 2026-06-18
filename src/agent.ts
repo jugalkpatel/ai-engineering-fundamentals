@@ -1,12 +1,6 @@
-import { AIChatAgent, OnChatMessageOptions } from "@cloudflare/ai-chat";
+import { AIChatAgent } from "@cloudflare/ai-chat";
 // NOTE - what is stepCountIs?
-import {
-  streamText,
-  stepCountIs,
-  convertToModelMessages,
-  StreamTextOnFinishCallback,
-  ToolSet,
-} from "ai";
+import { streamText, stepCountIs, convertToModelMessages } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { tools } from "./tools";
 import { SYSTEM_PROMPT } from "./system-prompt.ts";
@@ -16,10 +10,7 @@ interface ENV extends Cloudflare.Env {
 }
 
 export class DesignAgent extends AIChatAgent<ENV> {
-  async onChatMessage(
-    _onFinish: StreamTextOnFinishCallback<ToolSet>,
-    _options?: OnChatMessageOptions,
-  ): Promise<Response | undefined> {
+  async onChatMessage() {
     const openai = createOpenAI({ apiKey: this.env.OPENAI_API_KEY });
     // streamText - calls the LLM and returns a stream, so we can show tokens
     // to the user as they're generated instead of waiting for the full reply
