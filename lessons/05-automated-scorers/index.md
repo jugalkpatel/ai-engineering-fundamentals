@@ -1,6 +1,6 @@
 # Automated Scorers
 
-In lesson 4 you built a custom eval harness from scratch. You ran every test case through the agent and got raw JSON results. The point was to feel what an eval *is*: a dataset, a run loop, a scoring rubric. You also felt what's painful about doing it by hand: editing JSON to score, no UI, no comparison between runs, the dataset only really exercises "create from scratch" cases.
+In lesson 4 you built a custom eval harness from scratch. You ran every test case through the agent and got raw JSON results. The point was to feel what an eval _is_: a dataset, a run loop, a scoring rubric. You also felt what's painful about doing it by hand: editing JSON to score, no UI, no comparison between runs, the dataset only really exercises "create from scratch" cases.
 
 In this lesson we throw away the custom harness and adopt the real tools the industry uses: **`braintrust`** (the SDK and dashboard). Along the way we expand the agent so the eval and the worker share one source of truth, expand the dataset to cover modify and domain cases, and write code based scorers that actually measure the things lessons 6 through 11 will improve.
 
@@ -10,15 +10,19 @@ You could keep building the custom harness. Add a tiny web UI to read results, a
 
 The reason we built our own first wasn't to use it forever. It was to make sure when we install a framework, every piece of its API maps to a concept you already understand.
 
-| Our custom harness | Braintrust |
-|--------------------|------------|
-| `for` loop over test cases in `run.ts` | `Eval()` block |
-| Loading `golden.json` | `data: () => [...]` |
-| Calling `generateText` for each case | `task: async (input) => ...` |
-| Manually editing scores in JSON | scorer functions in `scores: [...]` |
-| Reading `evals/results/<timestamp>.json` | the Braintrust dashboard |
-| Eyeballing two JSON files | the dashboard's run history and comparison view |
-| `npm run eval` (custom tsx script) | `braintrust eval evals/diagram.eval.ts` |
+| Our custom harness                       | Braintrust                                      |
+| ---------------------------------------- | ----------------------------------------------- |
+| `for` loop over test cases in `run.ts`   | `Eval()` block                                  |
+| Loading `golden.json`                    | `data: () => [...]`                             |
+| Calling `generateText` for each case     | `task: async (input) => ...`                    |
+| Manually editing scores in JSON          | scorer functions in `scores: [...]`             |
+| Reading `evals/results/<timestamp>.json` | the Braintrust dashboard                        |
+| Eyeballing two JSON files                | the dashboard's run history and comparison view |
+| `npm run eval` (custom tsx script)       | `braintrust eval evals/diagram.eval.ts`         |
+
+### What are the main benefits of using Brain Trust over a custom-built eval harness?
+
+Brain Trust provides a dashboard/GUI for visualizing evaluation results, history tracking, comparison between runs, score tracking over time, and built-in score functions. It's a full product that eliminates the need to build and maintain a custom evaluation framework.
 
 ## Free Signup
 
@@ -47,6 +51,12 @@ OPENAI_API_KEY=your-openai-api-key-here
 BRAINTRUST_API_KEY=your-braintrust-api-key-here
 ```
 
+### What is Auto Evals and what types of evaluations does it provide?
+
+Link - https://github.com/braintrustdata/autoevals
+
+Auto Evals is a collection of automated evaluation functions that get evaluated programmatically (not by humans). It includes LLM-based evaluations (like factuality, moderation, security, summarization, SQL, translation), fine-tuned binary classifiers, RAG evaluations, composite evaluations, and JSON validity checks. It's a TypeScript library that works with Brain Trust's SDK.
+
 ## Expanding the dataset
 
 Lesson 4's dataset only covered "create a brand new diagram from a text prompt." That's half the agent's surface area. The other half is **modifying** an existing canvas, which the agent will completely fail at today (it has no canvas state in context yet — that's lesson 6) but which we want to measure right now so the lesson 6 lift is visible.
@@ -55,12 +65,12 @@ We also want **domain knowledge** cases (OAuth flow, Kubernetes pod/service/depl
 
 The new dataset is 23 cases broken into four categories:
 
-| Category | Count | Today's score | Lifted by |
-|----------|-------|---------------|-----------|
-| `create` | 14 | high | baseline, lesson 6 prompt work |
-| `modify` | 4 | very low | lesson 6 (canvas state in context) |
-| `domain` | 3 | low | lesson 8 (RAG) |
-| `edge` | 2 | mixed | trip wire |
+| Category | Count | Today's score | Lifted by                          |
+| -------- | ----- | ------------- | ---------------------------------- |
+| `create` | 14    | high          | baseline, lesson 6 prompt work     |
+| `modify` | 4     | very low      | lesson 6 (canvas state in context) |
+| `domain` | 3     | low           | lesson 8 (RAG)                     |
+| `edge`   | 2     | mixed         | trip wire                          |
 
 The whole point of putting categories in the dataset that score badly today is so future lessons have something to lift. If you only score what already works, every improvement looks like a 2 percent bump and nobody believes the eval matters.
 
@@ -76,11 +86,31 @@ A modify case can't just be "make the login box red" — the agent has no idea w
     "userPrompt": "draw two rectangles labeled login and database",
     "assistantConfirmation": "Done. Login on the left, database on the right.",
     "elements": [
-      { "id": "rect_login", "type": "rectangle", "x": 100, "y": 100, "width": 200, "height": 80, "text": "login" },
-      { "id": "rect_db", "type": "rectangle", "x": 500, "y": 100, "width": 200, "height": 80, "text": "database" }
+      {
+        "id": "rect_login",
+        "type": "rectangle",
+        "x": 100,
+        "y": 100,
+        "width": 200,
+        "height": 80,
+        "text": "login"
+      },
+      {
+        "id": "rect_db",
+        "type": "rectangle",
+        "x": 500,
+        "y": 100,
+        "width": 200,
+        "height": 80,
+        "text": "database"
+      }
     ]
   },
-  "expectedCharacteristics": ["rect_login still exists", "rect_login backgroundColor changed", "rect_db unchanged"],
+  "expectedCharacteristics": [
+    "rect_login still exists",
+    "rect_login backgroundColor changed",
+    "rect_db unchanged"
+  ],
   "preservedIds": ["rect_login", "rect_db"],
   "difficulty": "simple",
   "category": "modify"
@@ -139,7 +169,10 @@ export function buildMessages(tc: GoldenTestCase): ModelMessage[] {
           type: "tool-result",
           toolCallId: callId,
           toolName: "generateDiagram",
-          output: { type: "json", value: { elements: tc.seed.elements as never } },
+          output: {
+            type: "json",
+            value: { elements: tc.seed.elements as never },
+          },
         },
       ],
     },
@@ -179,15 +212,41 @@ interface AgentArgs {
 }
 
 // Streaming variant. Used by the worker for the live chat experience.
-export function streamAgent({ model, messages, system = SYSTEM_PROMPT, maxSteps = 5 }: AgentArgs) {
-  return streamText({ model, system, messages, tools, stopWhen: stepCountIs(maxSteps) });
+export function streamAgent({
+  model,
+  messages,
+  system = SYSTEM_PROMPT,
+  maxSteps = 5,
+}: AgentArgs) {
+  return streamText({
+    model,
+    system,
+    messages,
+    tools,
+    stopWhen: stepCountIs(maxSteps),
+  });
 }
 
 // Non streaming variant. Used by the eval so we can collect the full result
 // and pull out elements for scoring.
-export async function runAgent({ model, messages, system = SYSTEM_PROMPT, maxSteps = 5 }: AgentArgs) {
-  const result = await generateText({ model, system, messages, tools, stopWhen: stepCountIs(maxSteps) });
-  return { text: result.text, elements: extractElements(result.steps), steps: result.steps };
+export async function runAgent({
+  model,
+  messages,
+  system = SYSTEM_PROMPT,
+  maxSteps = 5,
+}: AgentArgs) {
+  const result = await generateText({
+    model,
+    system,
+    messages,
+    tools,
+    stopWhen: stepCountIs(maxSteps),
+  });
+  return {
+    text: result.text,
+    elements: extractElements(result.steps),
+    steps: result.steps,
+  };
 }
 
 interface StepLike {
@@ -256,32 +315,59 @@ import type { EvalScorer } from "braintrust";
 import type { GoldenTestCase } from "../buildMessages";
 
 const REQUIRED_FIELDS = ["id", "type", "x", "y", "width", "height"] as const;
-const VALID_TYPES = ["rectangle", "ellipse", "diamond", "text", "arrow", "line"];
+const VALID_TYPES = [
+  "rectangle",
+  "ellipse",
+  "diamond",
+  "text",
+  "arrow",
+  "line",
+];
 
 export interface AgentOutput {
   text: string;
   elements: unknown[];
 }
 
-export const schemaScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({ output }) => {
+export const schemaScorer: EvalScorer<
+  GoldenTestCase,
+  AgentOutput,
+  GoldenTestCase
+> = ({ output }) => {
   if (!Array.isArray(output.elements) || output.elements.length === 0) {
     return { name: "Schema", score: 0, metadata: { reason: "no elements" } };
   }
   for (const element of output.elements) {
     if (!element || typeof element !== "object") {
-      return { name: "Schema", score: 0, metadata: { reason: "element is not an object" } };
+      return {
+        name: "Schema",
+        score: 0,
+        metadata: { reason: "element is not an object" },
+      };
     }
     const el = element as Record<string, unknown>;
     for (const field of REQUIRED_FIELDS) {
       if (!(field in el)) {
-        return { name: "Schema", score: 0, metadata: { reason: `${el.id} missing ${field}` } };
+        return {
+          name: "Schema",
+          score: 0,
+          metadata: { reason: `${el.id} missing ${field}` },
+        };
       }
     }
     if (typeof el.type !== "string" || !VALID_TYPES.includes(el.type)) {
-      return { name: "Schema", score: 0, metadata: { reason: `${el.id} invalid type ${el.type}` } };
+      return {
+        name: "Schema",
+        score: 0,
+        metadata: { reason: `${el.id} invalid type ${el.type}` },
+      };
     }
   }
-  return { name: "Schema", score: 1, metadata: { elementCount: output.elements.length } };
+  return {
+    name: "Schema",
+    score: 1,
+    metadata: { elementCount: output.elements.length },
+  };
 };
 ```
 
@@ -300,10 +386,11 @@ import type { EvalScorer } from "braintrust";
 import type { AgentOutput } from "./schema";
 import type { GoldenTestCase } from "../buildMessages";
 
-export const preservationScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
-  output,
-  expected,
-}) => {
+export const preservationScorer: EvalScorer<
+  GoldenTestCase,
+  AgentOutput,
+  GoldenTestCase
+> = ({ output, expected }) => {
   const preservedIds = expected?.preservedIds;
   if (!preservedIds || preservedIds.length === 0) {
     return null; // skip cases that don't care about preservation
@@ -311,8 +398,11 @@ export const preservationScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenT
 
   const outputIds = new Set(
     output.elements
-      .filter((el): el is { id: string } => !!el && typeof el === "object" && "id" in el)
-      .map((el) => el.id)
+      .filter(
+        (el): el is { id: string } =>
+          !!el && typeof el === "object" && "id" in el,
+      )
+      .map((el) => el.id),
   );
 
   let kept = 0;
@@ -341,24 +431,33 @@ import type { EvalScorer } from "braintrust";
 import type { AgentOutput } from "./schema";
 import type { GoldenTestCase } from "../buildMessages";
 
-export const labelKeywordScorer: EvalScorer<GoldenTestCase, AgentOutput, GoldenTestCase> = ({
-  output,
-  expected,
-}) => {
+export const labelKeywordScorer: EvalScorer<
+  GoldenTestCase,
+  AgentOutput,
+  GoldenTestCase
+> = ({ output, expected }) => {
   const keywords = expected?.expectedKeywords;
   if (!keywords || keywords.length === 0) return null;
 
-  const haystack = [output.text, ...output.elements.flatMap((el) => {
-    if (!el || typeof el !== "object") return [];
-    const e = el as Record<string, unknown>;
-    return [e.text, e.label].filter((v) => typeof v === "string") as string[];
-  })].join(" ").toLowerCase();
+  const haystack = [
+    output.text,
+    ...output.elements.flatMap((el) => {
+      if (!el || typeof el !== "object") return [];
+      const e = el as Record<string, unknown>;
+      return [e.text, e.label].filter((v) => typeof v === "string") as string[];
+    }),
+  ]
+    .join(" ")
+    .toLowerCase();
 
   const matched = keywords.filter((kw) => haystack.includes(kw.toLowerCase()));
   return {
     name: "LabelKeywords",
     score: matched.length / keywords.length,
-    metadata: { matched, missing: keywords.filter((k) => !matched.includes(k)) },
+    metadata: {
+      matched,
+      missing: keywords.filter((k) => !matched.includes(k)),
+    },
   };
 };
 ```
@@ -388,7 +487,7 @@ config({ path: ".dev.vars" });
 const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const testCases: GoldenTestCase[] = JSON.parse(
-  readFileSync(join("evals", "datasets", "golden.json"), "utf-8")
+  readFileSync(join("evals", "datasets", "golden.json"), "utf-8"),
 );
 
 Eval<GoldenTestCase, AgentOutput, GoldenTestCase>("Diagram Agent", {
@@ -407,7 +506,12 @@ Eval<GoldenTestCase, AgentOutput, GoldenTestCase>("Diagram Agent", {
     return { text: result.text, elements: result.elements };
   },
 
-  scores: [schemaScorer, structureScorer, preservationScorer, labelKeywordScorer],
+  scores: [
+    schemaScorer,
+    structureScorer,
+    preservationScorer,
+    labelKeywordScorer,
+  ],
 });
 ```
 
@@ -481,12 +585,12 @@ If your shape is wildly different (e.g., Schema in the 50s, Preservation at 80) 
 
 Specifically, here's where you'd expect each lesson to lift things:
 
-| Lesson | Expected lift |
-|--------|---------------|
+| Lesson                      | Expected lift                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | **6 — Context engineering** | Preservation up dramatically (canvas state in context). Structure and LabelKeywords up across the board (better system prompt). |
-| **7 — Advanced tools** | Structure score up significantly. Smaller, focused tools mean fewer counting mistakes. |
-| **8 — RAG** | LabelKeywords up on `domain` cases. The agent finally knows the canonical terms for OAuth, AWS three tier, Kubernetes. |
-| **11 — Planning mode** | Hard `create` cases up. Org charts and complex flows benefit most from a planning step. |
+| **7 — Advanced tools**      | Structure score up significantly. Smaller, focused tools mean fewer counting mistakes.                                          |
+| **8 — RAG**                 | LabelKeywords up on `domain` cases. The agent finally knows the canonical terms for OAuth, AWS three tier, Kubernetes.          |
+| **11 — Planning mode**      | Hard `create` cases up. Org charts and complex flows benefit most from a planning step.                                         |
 
 If you don't see these lifts when you make those changes, something is wrong. That's the whole point of evals.
 
@@ -497,7 +601,7 @@ Code scorers cover correctness but not aesthetics. "Did the agent produce valid 
 In the dashboard, open your project's settings and find **Human review scores**. Click **Create human review score**. You'll get a modal asking for:
 
 - **Score name**: `Visual Quality`
-- **Description**: 
+- **Description**:
   ```
   Rate the diagram's visual quality as a human would judge it. Consider:
   - Are elements positioned sensibly (no overlaps, reasonable spacing)?
@@ -518,7 +622,7 @@ Why categorical instead of a slider? Humans are bad at "give this a 0.7." They'r
 
 Why four options instead of pass/fail? It gives you signal on "the agent is improving even if it's not perfect yet," which is the whole point of running evals across lessons.
 
-Once created, the score appears in every experiment row in the dashboard. Open a run, click into a row, pick an option, repeat. To actually *see* the diagram instead of squinting at element coordinates in JSON, copy the `output.elements` field from the Braintrust row and paste it into the **diagram viewer** that ships with the app: run `npm run dev`, click the small `viewer` button in the bottom left corner (or visit `http://localhost:5173/#viewer`), paste, and hit Render. A "← back to chat" link returns you to the normal app. The viewer accepts raw element arrays, `{ elements: [...] }` wrappers, or the full `{ text, elements }` task output, so you can paste whatever shape Braintrust hands you. After scoring 23 cases (about 5 minutes) you've got a baseline `Visual Quality` number alongside the four code scorers. Re run the eval after lesson 6, score the new run, compare the deltas in the run history view.
+Once created, the score appears in every experiment row in the dashboard. Open a run, click into a row, pick an option, repeat. To actually _see_ the diagram instead of squinting at element coordinates in JSON, copy the `output.elements` field from the Braintrust row and paste it into the **diagram viewer** that ships with the app: run `npm run dev`, click the small `viewer` button in the bottom left corner (or visit `http://localhost:5173/#viewer`), paste, and hit Render. A "← back to chat" link returns you to the normal app. The viewer accepts raw element arrays, `{ elements: [...] }` wrappers, or the full `{ text, elements }` task output, so you can paste whatever shape Braintrust hands you. After scoring 23 cases (about 5 minutes) you've got a baseline `Visual Quality` number alongside the four code scorers. Re run the eval after lesson 6, score the new run, compare the deltas in the run history view.
 
 You don't need to score every row of every run. A representative sample (say all the modify cases plus a couple of hard create cases) is plenty to know whether your agent got prettier.
 
