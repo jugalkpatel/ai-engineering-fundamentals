@@ -75,3 +75,13 @@
 - **Scalable** — Doesn't bloat context size as your app grows
 
 **Key insight:** Instead of pushing data to the LLM, let the LLM pull it when needed.
+
+### What constitutes a 'step' in the context of agent tool calling?
+
+A Step is when the agent tells you it needs a tool with specific arguments and you provide the results of that tool back to agent
+
+### When does an agent stop calling tools?
+
+When it reaches max steps, has enough context to answer or gives up
+
+### What is stepCountIs(n) and stopWhen params?
